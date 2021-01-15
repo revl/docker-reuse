@@ -1,15 +1,10 @@
-// Copyright (C) 2021 Damon Revoe. All rights reserved.
-// Use of this source code is governed by the MIT
-// license, which can be found in the LICENSE file.
-
 // +build !windows
 
 package main
 
 import (
-	"bytes"
+	"flag"
 	"fmt"
-	"go/doc"
 	"log"
 	"os"
 	"strings"
@@ -19,13 +14,7 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 )
 
-func wrapText(text string) string {
-	var buffer bytes.Buffer
-
-	doc.ToText(&buffer, text, "", "    ", 80)
-
-	return buffer.String()
-}
+var appName = "docker-reuse"
 
 func gitLog() error {
 	r, err := git.PlainOpen(".")
@@ -106,7 +95,33 @@ nextChild:
 }
 
 func main() {
-	sources, err := collectSourcesFromDockerfile("Dockerfile")
+	flag.Usage = func() {
+		fmt.Fprintln(flag.CommandLine.Output(),
+			"Usage:  "+appName+" build [OPTIONS] PATH NAME\n"+
+				"  PATH\n"+
+				"    \tDocker build context directory\n"+
+				"  NAME\n"+
+				"    \tImage name, including GCR repository")
+		flag.PrintDefaults()
+	}
+
+	dockerfilePathname := flag.String("f", "",
+		"Pathname of the `Dockerfile` (Default is 'PATH/Dockerfile')")
+
+	flag.Parse()
+
+	args := flag.Args()
+
+	if len(args) != 2 {
+		fmt.Fprintln(flag.CommandLine.Output(),
+			"invalid number of positional arguments")
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	log.Println(args, *dockerfilePathname)
+
+	sources, err := collectSourcesFromDockerfile(*dockerfilePathname)
 	if err != nil {
 		log.Fatalln(err)
 	}
