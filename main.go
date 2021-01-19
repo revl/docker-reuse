@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/sha1"
 	"flag"
 	"fmt"
 	"log"
@@ -90,7 +91,6 @@ func getLastCommitHash(pathname string) (string, error) {
 func collectSourcesFromDockerfile(pathname string) ([]string, error) {
 	file, err := os.Open(pathname)
 	if err != nil {
-		log.Fatalf("Error parsing %s: %v", pathname, err)
 		return nil, fmt.Errorf("Error parsing %s: %v", pathname, err)
 	}
 	defer file.Close()
@@ -133,6 +133,36 @@ nextChild:
 	return sources, nil
 }
 
+func computeImageHash(
+	workingDir string, dockerfilePathname string) (string, error) {
+
+	if dockerfilePathname == "" {
+		dockerfilePathname = filepath.Join(workingDir, "Dockerfile")
+	}
+
+	hash, err := getLastCommitHash(dockerfilePathname)
+	if err != nil {
+		return "", err
+	}
+
+	buf := "Dockerfile:" + hash + "\n"
+
+	sources, err := collectSourcesFromDockerfile(dockerfilePathname)
+	if err != nil {
+		return "", err
+	}
+
+	for _, source := range sources {
+		hash, err = getLastCommitHash(filepath.Join(workingDir, source))
+		if err != nil {
+			return "", err
+		}
+		buf += source + ":" + hash + "\n"
+	}
+
+	return fmt.Sprintf("%x", sha1.Sum([]byte(buf))), nil
+}
+
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(),
@@ -140,7 +170,7 @@ func main() {
 				"  PATH\n"+
 				"    \tDocker build context directory\n"+
 				"  NAME\n"+
-				"    \tImage name, including GCR repository")
+				"    \tImage name, including GCR registry")
 		flag.PrintDefaults()
 	}
 
@@ -161,26 +191,5 @@ func main() {
 	workingDir := args[0]
 	// imageName := args[1]
 
-	if *dockerfilePathname == "" {
-		*dockerfilePathname = filepath.Join(workingDir, "Dockerfile")
-	}
-
-	hash, err := getLastCommitHash(*dockerfilePathname)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	log.Println("Dockerfile:" + hash)
-
-	sources, err := collectSourcesFromDockerfile(*dockerfilePathname)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	for _, source := range sources {
-		pathname := filepath.Join(workingDir, source)
-		hash, err = getLastCommitHash(pathname)
-		if err != nil {
-			log.Fatalln(err)
-		}
-		log.Println(source + ":" + hash)
-	}
+	log.Println(computeImageHash(workingDir, *dockerfilePathname))
 }
