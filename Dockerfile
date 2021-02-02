@@ -10,4 +10,6 @@ FROM gcr.io/cloud-builders/docker:19.03.8
 
 COPY --from=build /go/src/docker-reuse/docker-reuse /usr/local/bin/
 
+ENV DOCKER_CLI_EXPERIMENTAL=enabled
+
 ENTRYPOINT ["/usr/local/bin/docker-reuse"]
