@@ -6,9 +6,12 @@ import (
 	"crypto/sha1"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -133,21 +136,30 @@ nextChild:
 	return sources, nil
 }
 
-func computeImageHash(
-	workingDir string, dockerfilePathname string) (string, error) {
+func computeImageHash(workingDir, dockerfile string,
+	quiet bool) (string, error) {
 
-	if dockerfilePathname == "" {
-		dockerfilePathname = filepath.Join(workingDir, "Dockerfile")
+	if dockerfile == "" {
+		dockerfile = filepath.Join(workingDir, "Dockerfile")
 	}
 
-	hash, err := getLastCommitHash(dockerfilePathname)
+	buf := ""
+
+	appendHash := func(source, commitHash string) {
+		line := source + ":" + commitHash + "\n"
+		if !quiet {
+			log.Print(line)
+		}
+		buf += line
+	}
+
+	hash, err := getLastCommitHash(dockerfile)
 	if err != nil {
 		return "", err
 	}
+	appendHash("Dockerfile", hash)
 
-	buf := "Dockerfile:" + hash + "\n"
-
-	sources, err := collectSourcesFromDockerfile(dockerfilePathname)
+	sources, err := collectSourcesFromDockerfile(dockerfile)
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +169,7 @@ func computeImageHash(
 		if err != nil {
 			return "", err
 		}
-		buf += source + ":" + hash + "\n"
+		appendHash(source, hash)
 	}
 
 	return fmt.Sprintf("%x", sha1.Sum([]byte(buf))), nil
@@ -166,30 +178,86 @@ func computeImageHash(
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(),
-			"Usage:  "+appName+" build [OPTIONS] PATH NAME\n"+
+			"Usage:  "+appName+" build [OPTIONS] PATH IMAGE FILE\n"+
 				"  PATH\n"+
 				"    \tDocker build context directory\n"+
-				"  NAME\n"+
-				"    \tImage name, including GCR registry")
+				"  IMAGE\n"+
+				"    \tName of the image to find or build\n"+
+				"  FILE\n"+
+				"    \tFile to update with the new image tag")
 		flag.PrintDefaults()
 	}
 
-	dockerfilePathname := flag.String("f", "",
+	dockerfile := flag.String("f", "",
 		"Pathname of the `Dockerfile` (Default is 'PATH/Dockerfile')")
+	quiet := flag.Bool("q", false, "Suppress build output")
 
 	flag.Parse()
 
 	args := flag.Args()
 
-	if len(args) != 2 {
+	if len(args) != 3 {
 		fmt.Fprintln(flag.CommandLine.Output(),
 			"invalid number of positional arguments")
 		flag.Usage()
 		os.Exit(2)
 	}
 
-	workingDir := args[0]
-	// imageName := args[1]
+	workingDir, imageName, templateFilename := args[0], args[1], args[2]
 
-	log.Println(computeImageHash(workingDir, *dockerfilePathname))
+	templateContents, err := ioutil.ReadFile(templateFilename)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Image tag may contain lowercase and uppercase letters, digits,
+	// underscores, periods and dashes.
+	re := regexp.MustCompile(regexp.QuoteMeta(imageName) + "(?::[-.\\w]+)?")
+
+	if len(re.Find(templateContents)) == 0 {
+		log.Fatalf("'%s' does not contain references to '%s'",
+			templateFilename, imageName)
+	}
+
+	imageHash, err := computeImageHash(workingDir, *dockerfile, *quiet)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	imageNameWithTag := imageName + ":" + imageHash
+	if !*quiet {
+		log.Println(imageNameWithTag)
+	}
+
+	// Check if the image already exists in the registry
+	cmd := exec.Command("docker", "manifest", "inspect", imageNameWithTag)
+	// cmd.Stderr = nil
+	_, err = cmd.Output()
+
+	if err == nil {
+		if !*quiet {
+			log.Print("Image already exists")
+		}
+	} else {
+		if ee, ok := err.(*exec.ExitError); ok {
+			for _, l := range strings.Split(
+				string(ee.Stderr[:]), "\n") {
+
+				if l != "" {
+					log.Println(l)
+				}
+			}
+		} else {
+			log.Fatal(err)
+		}
+	}
+
+	templateContents = re.ReplaceAll(
+		templateContents, []byte(imageNameWithTag))
+
+	if err = ioutil.WriteFile(
+		templateFilename, templateContents, 0); err != nil {
+
+		log.Fatal(err)
+	}
 }
