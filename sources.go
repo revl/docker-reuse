@@ -1,21 +1,14 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 )
 
-func collectSourcesFromDockerfile(pathname string) ([]string, error) {
-	file, err := os.Open(pathname)
-	if err != nil {
-		return nil, fmt.Errorf("Error parsing %s: %v", pathname, err)
-	}
-	defer file.Close()
-
-	res, err := parser.Parse(file)
+func collectSourcesFromDockerfile(f *os.File) ([]string, error) {
+	res, err := parser.Parse(f)
 	if err != nil {
 		return nil, err
 	}

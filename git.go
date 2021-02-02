@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"path/filepath"
 	"strings"
 
@@ -61,7 +61,7 @@ func getLastCommitHash(pathname string) (string, error) {
 	}
 
 	if !clean {
-		return "", fmt.Errorf("Error: %s has modifications", pathname)
+		return "", errors.New("local modifications detected")
 	}
 
 	commitIter, err := r.Log(logOptions)
@@ -71,9 +71,11 @@ func getLastCommitHash(pathname string) (string, error) {
 	defer commitIter.Close()
 
 	lastCommit, err := commitIter.Next()
-	if err != nil || lastCommit == nil {
-		return "", fmt.Errorf(
-			"No commit history found for %s", pathname)
+	if err != nil {
+		return "", err
+	}
+	if lastCommit == nil {
+		return "", errors.New("no commit history")
 	}
 
 	return lastCommit.Hash.String(), nil
