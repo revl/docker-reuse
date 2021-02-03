@@ -43,9 +43,8 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	}
 
 	// Check if the image already exists in the registry
-	cmd := exec.Command("docker", "manifest", "inspect", imageName)
-	// cmd.Stderr = nil
-	_, err = cmd.Output()
+	_, err = exec.Command(
+		"docker", "manifest", "inspect", imageName).Output()
 
 	if err == nil {
 		if !quiet {
@@ -61,6 +60,31 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 				}
 			}
 		} else {
+			log.Fatal(err)
+		}
+
+		args := []string{"build", ".", "-t", imageName}
+		if quiet {
+			args = append(args, "-q")
+		}
+		if dockerfile != "" {
+			args = append(args, "-f", dockerfile)
+		}
+		cmd := exec.Command("docker", args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err = cmd.Run(); err != nil {
+			log.Fatal(err)
+		}
+
+		args = []string{"push", imageName}
+		if quiet {
+			args = append(args, "-q")
+		}
+		cmd = exec.Command("docker", args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err = cmd.Run(); err != nil {
 			log.Fatal(err)
 		}
 	}
