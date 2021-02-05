@@ -14,6 +14,16 @@ import (
 
 var appName = "docker-reuse"
 
+func runDockerCmd(quiet bool, arg ...string) error {
+	cmd := exec.Command("docker", arg...)
+	cmd.Stderr = os.Stderr
+	if !quiet {
+		cmd.Stdout = os.Stdout
+		fmt.Println("Run: docker", strings.Join(arg, " "))
+	}
+	return cmd.Run()
+}
+
 func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	dockerfile string, quiet bool) error {
 
@@ -42,56 +52,39 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	}
 
 	// Check if the image already exists in the registry
-	_, err = exec.Command(
-		"docker", "manifest", "inspect", imageName).Output()
-
+	err = runDockerCmd(true, "manifest", "inspect", imageName)
 	if err == nil {
 		if !quiet {
 			fmt.Println("Image already exists")
 		}
-	} else {
-		if ee, ok := err.(*exec.ExitError); ok {
-			if !quiet {
-				for _, l := range strings.Split(
-					string(ee.Stderr[:]), "\n") {
+		return nil
+	}
 
-					if l != "" {
-						fmt.Fprintln(os.Stderr, l)
-					}
-				}
-			}
-		} else {
-			return err
-		}
+	// If the above command exited with a non-zero code, assume
+	// that the image does not exist. Abort on all other errors.
+	if _, ok := err.(*exec.ExitError); !ok {
+		return err
+	}
 
-		args := []string{"build", ".", "-t", imageName}
-		if quiet {
-			args = append(args, "-q")
-		}
-		if dockerfile != "" {
-			args = append(args, "-f", dockerfile)
-		}
-		cmd := exec.Command("docker", args...)
-		if !quiet {
-			cmd.Stdout = os.Stdout
-		}
-		cmd.Stderr = os.Stderr
-		if err = cmd.Run(); err != nil {
-			return err
-		}
+	// Build the image and push it to the container registry.
 
-		args = []string{"push", imageName}
-		if quiet {
-			args = append(args, "-q")
-		}
-		cmd = exec.Command("docker", args...)
-		if !quiet {
-			cmd.Stdout = os.Stdout
-		}
-		cmd.Stderr = os.Stderr
-		if err = cmd.Run(); err != nil {
-			return err
-		}
+	args := []string{"build", ".", "-t", imageName}
+	if quiet {
+		args = append(args, "-q")
+	}
+	if dockerfile != "" {
+		args = append(args, "-f", dockerfile)
+	}
+	if err = runDockerCmd(quiet, args...); err != nil {
+		return err
+	}
+
+	args = []string{"push", imageName}
+	if quiet {
+		args = append(args, "-q")
+	}
+	if err = runDockerCmd(quiet, args...); err != nil {
+		return err
 	}
 
 	templateContents = re.ReplaceAll(templateContents, []byte(imageName))
