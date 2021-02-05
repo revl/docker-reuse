@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 )
@@ -78,6 +77,8 @@ func parseAndHashDockerfile(dockerfile string) ([]string, string, error) {
 func computeFingerprint(workingDir, dockerfile string,
 	quiet bool) (string, error) {
 
+	workingDir = filepath.Clean(workingDir)
+
 	if dockerfile == "" {
 		dockerfile = filepath.Join(workingDir, "Dockerfile")
 	}
@@ -86,29 +87,34 @@ func computeFingerprint(workingDir, dockerfile string,
 
 	h := sha1.New()
 
-	appendHash := func(source, commitHash string) {
-		line := source + ":" + commitHash + "\n"
+	addSourceHash := func(source, hashType, hash string) {
 		if !quiet {
-			log.Print(line)
+			fmt.Println("Source:", source, hashType, hash)
 		}
-		h.Write([]byte(line))
+		h.Write([]byte(source + "@" + hashType + ":" + hash + "\n"))
 	}
 
-	appendHash("Dockerfile", hash)
+	addSourceHash("Dockerfile", "sha1", hash)
 
 	for _, source := range sources {
+		source = filepath.Clean(source)
 		pathname := filepath.Join(workingDir, source)
+
 		hash, err = getLastCommitHash(pathname)
-		if err != nil {
-			log.Printf("Warning: unable to use git commit "+
-				"hash for '%s': %v; falling back to file "+
-				"content hashing", pathname, err)
+		if err == nil {
+			addSourceHash(source, "commit", hash)
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: unable to use git "+
+				"commit hash for '%s': %v; falling back to "+
+				"file content hashing\n", pathname, err)
+
 			hash, err = hashFiles(pathname)
 			if err != nil {
 				return "", err
 			}
+
+			addSourceHash(source, "sha1", hash)
 		}
-		appendHash(source, hash)
 	}
 
 	return hex(h), nil

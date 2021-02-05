@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
 	"regexp"
@@ -16,11 +15,11 @@ import (
 var appName = "docker-reuse"
 
 func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
-	dockerfile string, quiet bool) {
+	dockerfile string, quiet bool) error {
 
 	templateContents, err := ioutil.ReadFile(templateFilename)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	// Image tag may contain lowercase and uppercase letters, digits,
@@ -28,18 +27,18 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	re := regexp.MustCompile(regexp.QuoteMeta(imageName) + "(?::[-.\\w]+)?")
 
 	if len(re.Find(templateContents)) == 0 {
-		log.Fatalf("'%s' does not contain references to '%s'",
+		return fmt.Errorf("'%s' does not contain references to '%s'",
 			templateFilename, imageName)
 	}
 
 	fingerprint, err := computeFingerprint(workingDir, dockerfile, quiet)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	imageName = imageName + ":" + fingerprint
 	if !quiet {
-		log.Println(imageName)
+		fmt.Println("Target image:", imageName)
 	}
 
 	// Check if the image already exists in the registry
@@ -48,19 +47,21 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 
 	if err == nil {
 		if !quiet {
-			log.Print("Image already exists")
+			fmt.Println("Image already exists")
 		}
 	} else {
 		if ee, ok := err.(*exec.ExitError); ok {
-			for _, l := range strings.Split(
-				string(ee.Stderr[:]), "\n") {
+			if !quiet {
+				for _, l := range strings.Split(
+					string(ee.Stderr[:]), "\n") {
 
-				if l != "" {
-					log.Println(l)
+					if l != "" {
+						fmt.Fprintln(os.Stderr, l)
+					}
 				}
 			}
 		} else {
-			log.Fatal(err)
+			return err
 		}
 
 		args := []string{"build", ".", "-t", imageName}
@@ -71,10 +72,12 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 			args = append(args, "-f", dockerfile)
 		}
 		cmd := exec.Command("docker", args...)
-		cmd.Stdout = os.Stdout
+		if !quiet {
+			cmd.Stdout = os.Stdout
+		}
 		cmd.Stderr = os.Stderr
 		if err = cmd.Run(); err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		args = []string{"push", imageName}
@@ -82,20 +85,18 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 			args = append(args, "-q")
 		}
 		cmd = exec.Command("docker", args...)
-		cmd.Stdout = os.Stdout
+		if !quiet {
+			cmd.Stdout = os.Stdout
+		}
 		cmd.Stderr = os.Stderr
 		if err = cmd.Run(); err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
 	templateContents = re.ReplaceAll(templateContents, []byte(imageName))
 
-	if err = ioutil.WriteFile(
-		templateFilename, templateContents, 0); err != nil {
-
-		log.Fatal(err)
-	}
+	return ioutil.WriteFile(templateFilename, templateContents, 0)
 }
 
 func main() {
@@ -126,5 +127,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	findOrBuildAndPushImage(args[0], args[1], args[2], *dockerfile, *quiet)
+	if err := findOrBuildAndPushImage(
+		args[0], args[1], args[2], *dockerfile, *quiet); err != nil {
+
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
