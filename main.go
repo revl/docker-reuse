@@ -13,7 +13,19 @@ import (
 	"strings"
 )
 
-var appName = "docker-reuse"
+var usage = `Usage:  docker-reuse build [OPTIONS] PATH IMAGE FILE [ARG...]
+
+Arguments:
+  PATH
+    	Docker build context directory
+  IMAGE
+    	Name of the image to find or build
+  FILE
+    	File to update with the new image tag
+  [ARG...]
+    	Optional build arguments (Format: ARG[=value])
+
+Options:`
 
 func runDockerCmd(quiet bool, arg ...string) error {
 	cmd := exec.Command("docker", arg...)
@@ -26,7 +38,7 @@ func runDockerCmd(quiet bool, arg ...string) error {
 }
 
 func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
-	dockerfile string, quiet bool) error {
+	dockerfile string, buildArgs []string, quiet bool) error {
 
 	templateContents, err := ioutil.ReadFile(templateFilename)
 	if err != nil {
@@ -56,7 +68,16 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		}
 	}
 
-	fingerprint, err := computeFingerprint(workingDir, dockerfile, quiet)
+	// Load any missing build argument values from the respective
+	// environment variables.
+	for i, arg := range buildArgs {
+		if !strings.ContainsRune(arg, '=') {
+			buildArgs[i] = arg + "=" + os.Getenv(arg)
+		}
+	}
+
+	fingerprint, err := computeFingerprint(
+		workingDir, dockerfile, buildArgs, quiet)
 	if err != nil {
 		return err
 	}
@@ -88,6 +109,9 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		if dockerfile != "" {
 			args = append(args, "-f", dockerfile)
 		}
+		for _, buildArg := range buildArgs {
+			args = append(args, "--build-arg", buildArg)
+		}
 		if err = runDockerCmd(quiet, args...); err != nil {
 			return err
 		}
@@ -115,14 +139,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(),
-			"Usage:  "+appName+" build [OPTIONS] PATH IMAGE FILE\n"+
-				"  PATH\n"+
-				"    \tDocker build context directory\n"+
-				"  IMAGE\n"+
-				"    \tName of the image to find or build\n"+
-				"  FILE\n"+
-				"    \tFile to update with the new image tag")
+		fmt.Fprintln(flag.CommandLine.Output(), usage)
 		flag.PrintDefaults()
 	}
 
@@ -134,15 +151,15 @@ func main() {
 
 	args := flag.Args()
 
-	if len(args) != 3 {
+	if len(args) < 3 {
 		fmt.Fprintln(flag.CommandLine.Output(),
 			"invalid number of positional arguments")
 		flag.Usage()
 		os.Exit(2)
 	}
 
-	if err := findOrBuildAndPushImage(
-		args[0], args[1], args[2], *dockerfile, *quiet); err != nil {
+	if err := findOrBuildAndPushImage(args[0], args[1], args[2],
+		*dockerfile, args[3:], *quiet); err != nil {
 
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

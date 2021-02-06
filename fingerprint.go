@@ -74,7 +74,7 @@ func parseAndHashDockerfile(dockerfile string) ([]string, string, error) {
 	return sources, hex(h), nil
 }
 
-func computeFingerprint(workingDir, dockerfile string,
+func computeFingerprint(workingDir, dockerfile string, buildArgs []string,
 	quiet bool) (string, error) {
 
 	workingDir = filepath.Clean(workingDir)
@@ -115,6 +115,14 @@ func computeFingerprint(workingDir, dockerfile string,
 
 			addSourceHash(source, "sha1", hash)
 		}
+	}
+
+	for _, buildArg := range buildArgs {
+		if !quiet {
+			fmt.Println("Arg:", buildArg)
+		}
+		h.Write([]byte(buildArg))
+		h.Write([]byte("\n"))
 	}
 
 	return hex(h), nil
