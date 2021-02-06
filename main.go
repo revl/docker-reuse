@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -36,9 +37,23 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	// underscores, periods and dashes.
 	re := regexp.MustCompile(regexp.QuoteMeta(imageName) + "(?::[-.\\w]+)?")
 
-	if len(re.Find(templateContents)) == 0 {
+	imageRefs := re.FindAll(templateContents, -1)
+
+	if len(imageRefs) == 0 {
 		return fmt.Errorf("'%s' does not contain references to '%s'",
 			templateFilename, imageName)
+	}
+
+	originalImageRef := imageRefs[0]
+
+	// Check that all references to the image within the template
+	// file are identical.
+	for i := 1; i < len(imageRefs); i++ {
+		if bytes.Compare(imageRefs[i], originalImageRef) != 0 {
+			return fmt.Errorf(
+				"'%s' contains inconsistent references to '%s'",
+				templateFilename, imageName)
+		}
 	}
 
 	fingerprint, err := computeFingerprint(workingDir, dockerfile, quiet)
@@ -57,39 +72,45 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		if !quiet {
 			fmt.Println("Image already exists")
 		}
+	} else {
+		// If the above command exited with a non-zero code, assume
+		// that the image does not exist. Abort on all other errors.
+		if _, ok := err.(*exec.ExitError); !ok {
+			return err
+		}
+
+		// Build the image and push it to the container registry.
+
+		args := []string{"build", ".", "-t", imageName}
+		if quiet {
+			args = append(args, "-q")
+		}
+		if dockerfile != "" {
+			args = append(args, "-f", dockerfile)
+		}
+		if err = runDockerCmd(quiet, args...); err != nil {
+			return err
+		}
+
+		args = []string{"push", imageName}
+		if quiet {
+			args = append(args, "-q")
+		}
+		if err = runDockerCmd(quiet, args...); err != nil {
+			return err
+		}
+	}
+
+	newImageRef := []byte(imageName)
+
+	// No need to update the output file if it already contains
+	// the right reference.
+	if bytes.Compare(originalImageRef, newImageRef) == 0 {
 		return nil
 	}
 
-	// If the above command exited with a non-zero code, assume
-	// that the image does not exist. Abort on all other errors.
-	if _, ok := err.(*exec.ExitError); !ok {
-		return err
-	}
-
-	// Build the image and push it to the container registry.
-
-	args := []string{"build", ".", "-t", imageName}
-	if quiet {
-		args = append(args, "-q")
-	}
-	if dockerfile != "" {
-		args = append(args, "-f", dockerfile)
-	}
-	if err = runDockerCmd(quiet, args...); err != nil {
-		return err
-	}
-
-	args = []string{"push", imageName}
-	if quiet {
-		args = append(args, "-q")
-	}
-	if err = runDockerCmd(quiet, args...); err != nil {
-		return err
-	}
-
-	templateContents = re.ReplaceAll(templateContents, []byte(imageName))
-
-	return ioutil.WriteFile(templateFilename, templateContents, 0)
+	return ioutil.WriteFile(templateFilename,
+		re.ReplaceAll(templateContents, newImageRef), 0)
 }
 
 func main() {
@@ -123,7 +144,7 @@ func main() {
 	if err := findOrBuildAndPushImage(
 		args[0], args[1], args[2], *dockerfile, *quiet); err != nil {
 
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
