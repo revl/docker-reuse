@@ -23,9 +23,14 @@ Arguments:
   FILE
     	File to update with the new image tag
   [ARG...]
-    	Optional build arguments (Format: ARG[=value])
+    	Optional build arguments (Format: NAME[=value])
 
 Options:`
+
+var dockerfileFlag = flag.String("f", "",
+	"Pathname of the `Dockerfile` (Default is 'PATH/Dockerfile')")
+
+var quietFlag = flag.Bool("q", false, "Suppress build output")
 
 func runDockerCmd(quiet bool, arg ...string) error {
 	cmd := exec.Command("docker", arg...)
@@ -65,14 +70,6 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 			return fmt.Errorf(
 				"'%s' contains inconsistent references to '%s'",
 				templateFilename, imageName)
-		}
-	}
-
-	// Load any missing build argument values from the respective
-	// environment variables.
-	for i, arg := range buildArgs {
-		if !strings.ContainsRune(arg, '=') {
-			buildArgs[i] = arg + "=" + os.Getenv(arg)
 		}
 	}
 
@@ -143,10 +140,6 @@ func main() {
 		flag.PrintDefaults()
 	}
 
-	dockerfile := flag.String("f", "",
-		"Pathname of the `Dockerfile` (Default is 'PATH/Dockerfile')")
-	quiet := flag.Bool("q", false, "Suppress build output")
-
 	flag.Parse()
 
 	args := flag.Args()
@@ -158,8 +151,19 @@ func main() {
 		os.Exit(2)
 	}
 
+	buildArgs := args[3:]
+
+	// Load any missing build argument values from the respective
+	// environment variables.  This job cannot be left to docker
+	// because argument values are part of the image fingerprint.
+	for i, arg := range buildArgs {
+		if !strings.ContainsRune(arg, '=') {
+			buildArgs[i] = arg + "=" + os.Getenv(arg)
+		}
+	}
+
 	if err := findOrBuildAndPushImage(args[0], args[1], args[2],
-		*dockerfile, args[3:], *quiet); err != nil {
+		*dockerfileFlag, buildArgs, *quietFlag); err != nil {
 
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
