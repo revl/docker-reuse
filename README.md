@@ -48,3 +48,11 @@ Options:
 *   `-q`
 
     Suppress build output
+
+## Example
+
+    docker-reuse \
+        -f docker/myapp/Dockerfile \
+        src/myapp \
+        mydockerhubid/myapp \
+        kubernetes/myapp/deployment.yaml
