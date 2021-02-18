@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-var usage = `Usage:  docker-reuse build [OPTIONS] PATH IMAGE FILE [ARG...]
+var usage = `Usage:  docker-reuse [OPTIONS] PATH IMAGE FILE [ARG...]
 
 Arguments:
   PATH
