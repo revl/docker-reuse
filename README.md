@@ -1,12 +1,23 @@
 ## Overview
 
-`docker-reuse` is a tool for building and publishing Docker images. It has two 
+`docker-reuse` is a tool for building and publishing Docker images. It has two
 related and complementary purposes:
 
 1.  Make the image content-addressable by tagging it with a fingerprint
     computed from the sources referenced in the Dockerfile.
+
+    As a result, the image tag never changes unless the sources have changed,
+    and so Kubernetes (or another orchestration system) won't have to restart
+    the containers that use that image.
+
 2.  Save time and resources by bypassing the lengthy build and push operations
     if not a single source has changed.
+
+    This performance improvement is less significant for the local Docker
+    builds, which are relatively fast if the sources did not change. However,
+    for the environments where Docker layer caching is not available (like
+    Google Cloud Build), knowing when it is safe to skip the entire build can
+    be an enormous time-saver.
 
 Here's how `docker-reuse` works:
 
@@ -52,7 +63,7 @@ Options:
 ## Example
 
     docker-reuse \
-        -f docker/myapp/Dockerfile \
-        src/myapp \
+        -f ./docker/myapp/Dockerfile \
+        ./src/myapp \
         mydockerhubid/myapp \
-        kubernetes/myapp/deployment.yaml
+        ./kubernetes/myapp/deployment.yaml
