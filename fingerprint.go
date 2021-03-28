@@ -96,10 +96,7 @@ func computeFingerprint(workingDir, dockerfile string, buildArgs []string,
 
 	addSourceHash("Dockerfile", "sha1", hash)
 
-	for _, source := range sources {
-		source = filepath.Clean(source)
-		pathname := filepath.Join(workingDir, source)
-
+	hashSource := func(source, pathname string) error {
 		hash, err = getLastCommitHash(pathname)
 		if err == nil {
 			addSourceHash(source, "commit", hash)
@@ -110,11 +107,43 @@ func computeFingerprint(workingDir, dockerfile string, buildArgs []string,
 
 			hash, err = hashFiles(pathname)
 			if err != nil {
-				return "", err
+				return err
 			}
 
 			addSourceHash(source, "sha1", hash)
 		}
+		return nil
+	}
+
+	for _, source := range sources {
+		source = filepath.Clean(source)
+		pathname := filepath.Join(workingDir, source)
+
+		if _, err := os.Stat(pathname); err != nil {
+			if !os.IsNotExist(err) {
+				return "", err
+			}
+
+			// Try interpreting the path as a glob pattern.
+			matches, _ := filepath.Glob(pathname)
+			// If nothing matched, return the original Stat() error.
+			if len(matches) == 0 {
+				return "", err
+			}
+
+			for _, pathname = range matches {
+				// Ignore the impossible Rel() error.
+				source, _ = filepath.Rel(workingDir, pathname)
+
+				if err = hashSource(
+					source, pathname); err != nil {
+					return "", err
+				}
+			}
+		} else if err = hashSource(source, pathname); err != nil {
+			return "", err
+		}
+
 	}
 
 	for _, buildArg := range buildArgs {
