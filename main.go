@@ -13,29 +13,6 @@ import (
 	"strings"
 )
 
-var usage = `Usage:  docker-reuse [OPTIONS] PATH IMAGE FILE [ARG...]
-
-Arguments:
-  PATH
-    	Docker build context directory
-  IMAGE
-    	Name of the image to find or build
-  FILE
-    	File to update with the new image tag
-  [ARG...]
-    	Optional build arguments (format: NAME[=value])
-
-Options:`
-
-var dockerfileFlag = flag.String("f", "",
-	"Pathname of the `Dockerfile` (by default, 'PATH/Dockerfile')")
-
-var quietFlag = flag.Bool("q", false, "Suppress build output")
-
-var imagePlaceholderFlag = flag.String("p", "",
-	"Placeholder for the image name in FILE "+
-		"(by default, the image name itself)")
-
 func runDockerCmd(quiet bool, arg ...string) error {
 	cmd := exec.Command("docker", arg...)
 	cmd.Stderr = os.Stderr
@@ -61,7 +38,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	if len(placeholder) != 0 {
 		if !bytes.Contains(templateContents, placeholder) {
 			return fmt.Errorf(
-				"'%s' does not contain '%s'",
+				"'%s' does not contain occurrences of '%s'",
 				templateFilename, placeholderString)
 		}
 	} else {
@@ -153,7 +130,30 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		bytes.ReplaceAll(templateContents, placeholder, newImageRef), 0)
 }
 
+var usage = `Usage:  docker-reuse [OPTIONS] PATH IMAGE FILE [ARG...]
+
+Arguments:
+  PATH
+    	Docker build context directory
+  IMAGE
+    	Name of the image to find or build
+  FILE
+    	File to update with the new image tag
+  [ARG...]
+    	Optional build arguments (format: NAME[=value])
+
+Options:`
+
 func main() {
+	var dockerfileFlag = flag.String("f", "",
+		"Pathname of the `Dockerfile` (by default, 'PATH/Dockerfile')")
+
+	var quietFlag = flag.Bool("q", false, "Suppress build output")
+
+	var imagePlaceholderFlag = flag.String("p", "",
+		"Placeholder for the image name in FILE "+
+			"(by default, the image name itself)")
+
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), usage)
 		flag.PrintDefaults()
