@@ -46,69 +46,50 @@ func runDockerCmd(quiet bool, arg ...string) error {
 	return cmd.Run()
 }
 
-// readTemplateAndGetPlaceholder reads the template and makes sure that the
-// template contains at least one occurrence of the image name placeholder.
-// The template contents and the placeholder string are returned as bytes.
-func readTemplateAndGetPlaceholder(
-	templateFilename, placeholderString, imageName string) (
-	[]byte, []byte, error) {
-
-	templateContents, err := ioutil.ReadFile(templateFilename)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Check if the placeholder is explicitly specified on the command line.
-	if placeholderString != "" {
-		placeholder := []byte(placeholderString)
-
-		if !bytes.Contains(templateContents, placeholder) {
-			return nil, nil, fmt.Errorf(
-				"'%s' does not contain '%s'",
-				templateFilename, placeholderString)
-		}
-
-		return templateContents, placeholder, nil
-	}
-
-	// Otherwise, use the image name itself as the placeholder.
-
-	// Image tag may contain lowercase and uppercase letters, digits,
-	// underscores, periods, and dashes.
-	re := regexp.MustCompile(regexp.QuoteMeta(imageName) + "(?::[-.\\w]+)?")
-
-	imageRefs := re.FindAll(templateContents, -1)
-
-	if len(imageRefs) == 0 {
-		return nil, nil, fmt.Errorf(
-			"'%s' does not contain references to '%s'",
-			templateFilename, imageName)
-	}
-
-	originalImageRef := imageRefs[0]
-
-	// Check that all references to the image within the template
-	// file are identical.
-	for i := 1; i < len(imageRefs); i++ {
-		if bytes.Compare(imageRefs[i], originalImageRef) != 0 {
-			return nil, nil, fmt.Errorf(
-				"'%s' contains inconsistent references to '%s'",
-				templateFilename, imageName)
-		}
-	}
-
-	return templateContents, originalImageRef, nil
-}
-
-func findOrBuildAndPushImage(
-	workingDir, imageName, templateFilename,
+func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	placeholderString, dockerfile string,
 	buildArgs []string, quiet bool) error {
 
-	templateContents, placeholder, err := readTemplateAndGetPlaceholder(
-		templateFilename, placeholderString, imageName)
+	templateContents, err := ioutil.ReadFile(templateFilename)
 	if err != nil {
 		return err
+	}
+
+	// Check if the placeholder is explicitly specified on the command line.
+	placeholder := []byte(placeholderString)
+
+	if len(placeholder) != 0 {
+		if !bytes.Contains(templateContents, placeholder) {
+			return fmt.Errorf(
+				"'%s' does not contain '%s'",
+				templateFilename, placeholderString)
+		}
+	} else {
+		// Use the image name itself as the placeholder.
+		re := regexp.MustCompile(regexp.QuoteMeta(imageName) +
+			// Image tag may contain lowercase and uppercase
+			// letters, digits, underscores, periods, and dashes.
+			"(?::[-.\\w]+)?")
+
+		imageRefs := re.FindAll(templateContents, -1)
+
+		if len(imageRefs) == 0 {
+			return fmt.Errorf(
+				"'%s' does not contain references to '%s'",
+				templateFilename, imageName)
+		}
+
+		placeholder = imageRefs[0]
+
+		// Check that all references to the image within the template
+		// file are identical.
+		for i := 1; i < len(imageRefs); i++ {
+			if bytes.Compare(imageRefs[i], placeholder) != 0 {
+				return fmt.Errorf("'%s' contains "+
+					"inconsistent references to '%s'",
+					templateFilename, imageName)
+			}
+		}
 	}
 
 	fingerprint, err := computeFingerprint(
