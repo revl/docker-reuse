@@ -23,14 +23,18 @@ Arguments:
   FILE
     	File to update with the new image tag
   [ARG...]
-    	Optional build arguments (Format: NAME[=value])
+    	Optional build arguments (format: NAME[=value])
 
 Options:`
 
 var dockerfileFlag = flag.String("f", "",
-	"Pathname of the `Dockerfile` (Default is 'PATH/Dockerfile')")
+	"Pathname of the `Dockerfile` (by default, 'PATH/Dockerfile')")
 
 var quietFlag = flag.Bool("q", false, "Suppress build output")
+
+var imagePlaceholderFlag = flag.String("p", "",
+	"Placeholder for the image name in FILE "+
+		"(by default, the image name itself)")
 
 func runDockerCmd(quiet bool, arg ...string) error {
 	cmd := exec.Command("docker", arg...)
@@ -42,22 +46,42 @@ func runDockerCmd(quiet bool, arg ...string) error {
 	return cmd.Run()
 }
 
-func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
-	dockerfile string, buildArgs []string, quiet bool) error {
+// readTemplateAndGetPlaceholder reads the template and makes sure that the
+// template contains at least one occurrence of the image name placeholder.
+// The template contents and the placeholder string are returned as bytes.
+func readTemplateAndGetPlaceholder(
+	templateFilename, placeholderString, imageName string) (
+	[]byte, []byte, error) {
 
 	templateContents, err := ioutil.ReadFile(templateFilename)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
+	// Check if the placeholder is explicitly specified on the command line.
+	if placeholderString != "" {
+		placeholder := []byte(placeholderString)
+
+		if !bytes.Contains(templateContents, placeholder) {
+			return nil, nil, fmt.Errorf(
+				"'%s' does not contain '%s'",
+				templateFilename, placeholderString)
+		}
+
+		return templateContents, placeholder, nil
+	}
+
+	// Otherwise, use the image name itself as the placeholder.
+
 	// Image tag may contain lowercase and uppercase letters, digits,
-	// underscores, periods and dashes.
+	// underscores, periods, and dashes.
 	re := regexp.MustCompile(regexp.QuoteMeta(imageName) + "(?::[-.\\w]+)?")
 
 	imageRefs := re.FindAll(templateContents, -1)
 
 	if len(imageRefs) == 0 {
-		return fmt.Errorf("'%s' does not contain references to '%s'",
+		return nil, nil, fmt.Errorf(
+			"'%s' does not contain references to '%s'",
 			templateFilename, imageName)
 	}
 
@@ -67,10 +91,24 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	// file are identical.
 	for i := 1; i < len(imageRefs); i++ {
 		if bytes.Compare(imageRefs[i], originalImageRef) != 0 {
-			return fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"'%s' contains inconsistent references to '%s'",
 				templateFilename, imageName)
 		}
+	}
+
+	return templateContents, originalImageRef, nil
+}
+
+func findOrBuildAndPushImage(
+	workingDir, imageName, templateFilename,
+	placeholderString, dockerfile string,
+	buildArgs []string, quiet bool) error {
+
+	templateContents, placeholder, err := readTemplateAndGetPlaceholder(
+		templateFilename, placeholderString, imageName)
+	if err != nil {
+		return err
 	}
 
 	fingerprint, err := computeFingerprint(
@@ -126,12 +164,12 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 
 	// No need to update the output file if it already contains
 	// the right reference.
-	if bytes.Compare(originalImageRef, newImageRef) == 0 {
+	if bytes.Compare(placeholder, newImageRef) == 0 {
 		return nil
 	}
 
 	return ioutil.WriteFile(templateFilename,
-		re.ReplaceAll(templateContents, newImageRef), 0)
+		bytes.ReplaceAll(templateContents, placeholder, newImageRef), 0)
 }
 
 func main() {
@@ -163,7 +201,8 @@ func main() {
 	}
 
 	if err := findOrBuildAndPushImage(args[0], args[1], args[2],
-		*dockerfileFlag, buildArgs, *quietFlag); err != nil {
+		*imagePlaceholderFlag, *dockerfileFlag,
+		buildArgs, *quietFlag); err != nil {
 
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
