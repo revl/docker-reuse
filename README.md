@@ -56,6 +56,11 @@ Options:
 
     Pathname of the Dockerfile (Default is `PATH/Dockerfile`)
 
+*   `-p string`
+
+    Placeholder for the image name in `FILE` (by default, the image name
+    itself).
+
 *   `-q`
 
     Suppress build output
