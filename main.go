@@ -1,4 +1,4 @@
-// +build !windows
+//go:build !windows
 
 package main
 
@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"regexp"
@@ -27,7 +26,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	placeholderString, dockerfile string,
 	buildArgs []string, quiet bool) error {
 
-	templateContents, err := ioutil.ReadFile(templateFilename)
+	templateContents, err := os.ReadFile(templateFilename)
 	if err != nil {
 		return err
 	}
@@ -61,7 +60,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		// Check that all references to the image within the template
 		// file are identical.
 		for i := 1; i < len(imageRefs); i++ {
-			if bytes.Compare(imageRefs[i], placeholder) != 0 {
+			if !bytes.Equal(imageRefs[i], placeholder) {
 				return fmt.Errorf("'%s' contains "+
 					"inconsistent references to '%s'",
 					templateFilename, imageName)
@@ -122,11 +121,11 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 
 	// No need to update the output file if it already contains
 	// the right reference.
-	if bytes.Compare(placeholder, newImageRef) == 0 {
+	if bytes.Equal(placeholder, newImageRef) {
 		return nil
 	}
 
-	return ioutil.WriteFile(templateFilename,
+	return os.WriteFile(templateFilename,
 		bytes.ReplaceAll(templateContents, placeholder, newImageRef), 0)
 }
 
