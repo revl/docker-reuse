@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 )
 
+// hex returns the hexadecimal representation of the hashsum.
 func hex(h hash.Hash) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
+// hashFiles hashes the files in the given pathname using SHA1 and returns
+// the hashsum as a hexadecimal string.
 func hashFiles(pathname string) (string, error) {
 	h := sha1.New()
 
@@ -50,6 +53,8 @@ func hashFiles(pathname string) (string, error) {
 	return hex(h), nil
 }
 
+// parseAndHashDockerfile parses the Dockerfile, extracts the sources from it,
+// and returns the the sources and the hashsum of the Dockerfile using SHA1.
 func parseAndHashDockerfile(dockerfile string) ([]string, string, error) {
 	f, err := os.Open(dockerfile)
 	if err != nil {
@@ -74,6 +79,9 @@ func parseAndHashDockerfile(dockerfile string) ([]string, string, error) {
 	return sources, hex(h), nil
 }
 
+// computeFingerprint computes the fingerprint of the Dockerfile, all sources
+// from it, and the build arguments using SHA1 and returns the fingerprint as
+// a hexadecimal string.
 func computeFingerprint(workingDir, dockerfile string, buildArgs []string,
 	quiet bool) (string, error) {
 

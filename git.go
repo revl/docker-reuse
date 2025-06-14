@@ -8,6 +8,9 @@ import (
 	"github.com/go-git/go-git/v5"
 )
 
+// getLastCommitHash returns the hash of the last commit in the subtree of the
+// repository rooted at pathname. It returns an error if the repository cannot
+// be opened or if there are local modifications.
 func getLastCommitHash(pathname string) (string, error) {
 	abs, err := filepath.Abs(pathname)
 	if err != nil {
@@ -26,6 +29,9 @@ func getLastCommitHash(pathname string) (string, error) {
 	}
 	root := wt.Filesystem.Root()
 
+	// Check if the repository subtree rooted at `pathname` is clean. The last
+	// commit of `pathname` cannot be used as its fingerprint if there are
+	// local modifications.
 	status, err := wt.Status()
 	if err != nil {
 		return "", err
@@ -64,6 +70,7 @@ func getLastCommitHash(pathname string) (string, error) {
 		return "", errors.New("local modifications detected")
 	}
 
+	// Get the last commit hash.
 	commitIter, err := r.Log(logOptions)
 	if err != nil {
 		return "", err

@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+// runDockerCmd runs a docker command and prints the command to the standard
+// output if not quiet.
 func runDockerCmd(quiet bool, arg ...string) error {
 	cmd := exec.Command("docker", arg...)
 	cmd.Stderr = os.Stderr
@@ -22,6 +24,8 @@ func runDockerCmd(quiet bool, arg ...string) error {
 	return cmd.Run()
 }
 
+// findOrBuildAndPushImage finds an existing image or builds and pushes a new
+// image to the container registry.
 func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 	placeholderString, dockerfile string,
 	buildArgs []string, quiet bool) error {

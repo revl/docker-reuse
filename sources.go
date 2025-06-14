@@ -7,6 +7,8 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 )
 
+// collectSourcesFromDockerfile collects and returns the sources from the
+// Dockerfile.
 func collectSourcesFromDockerfile(f *os.File) ([]string, error) {
 	res, err := parser.Parse(f)
 	if err != nil {
