@@ -28,11 +28,11 @@ Here's how `docker-reuse` works:
    fingerprint as a tag.
 3. If no such image exists, the tool builds it and pushes it to the registry.
 4. In either case, `docker-reuse` updates all references to the image in a
-   user-provided file to contain this exact image tag.
+   user-provided template file(s) to contain this exact image tag.
 
 ## Usage as a command line tool
 
-`docker-reuse [OPTIONS] PATH IMAGE FILE [ARG...]`
+`docker-reuse [OPTIONS] PATH IMAGE [ARG...]`
 
 Positional arguments are:
 
@@ -43,10 +43,6 @@ Positional arguments are:
 - `IMAGE`
 
   Name of the image to find or build
-
-- `FILE`
-
-  File to update with the new image tag
 
 - `[ARG...]`
 
@@ -60,22 +56,43 @@ Options:
 
   Pathname of the Dockerfile (Default is `PATH/Dockerfile`)
 
-- `-p string`
+- `-p PLACEHOLDER`
 
-  Placeholder for the image name in `FILE` (by default, the image name
-  itself).
+  Placeholder for the image name in the file specified by `-u` (by default,
+  the image name itself).
 
 - `-q`
 
   Suppress build output
 
+- `-u FILE`
+
+  File to update with the new image tag. Can be specified multiple times.
+
+- `-t TAG`
+
+  Tag to use for the image (by default, a 160-bit fingerprint computed from
+  the sources is the only tag used). Can be specified multiple times.
+
+- `-m MDOE`
+
+  Fingerprinting mode &mdash; one of the following:
+
+  - `commit` &mdash; use the commit hash as the fingerprint
+  - `sha1` &mdash; compute the SHA1 hash of the source files and use the combined
+    hash as the fingerprint
+  - `auto` &mdash; use the commit hash if available, otherwise fall back to
+    `sha1`
+
 ### Example
 
     docker-reuse \
         -f ./docker/myapp/Dockerfile \
+        -u ./kubernetes/myapp/deployment.yaml \
+        -t v1.0.0 \
+        -m sha1 \
         ./src/myapp \
-        mydockerhubid/myapp \
-        ./kubernetes/myapp/deployment.yaml
+        mydockerhubid/myapp
 
 ## Usage as a Google Cloud Build builder
 
@@ -94,11 +111,12 @@ Here's an example of a trivial but complete `cloudbuild.yaml`:
         args: [
             "-f",
             "docker/hello-world/Dockerfile",
+            "-u",
+            "kubernetes/hello-world/deployment.yaml", # the file to update
             "-p",
             "IMAGE_PLACEHOLDER", # the string to replace in deployment.yaml
             ".",
             "gcr.io/$PROJECT_ID/hello-world", # the image to build
-            "kubernetes/hello-world/deployment.yaml", # the file to update
             "GREETING=Hello, World!", # build-arg value is provided
             "PORT", # build-arg value is taken from the environment
           ]
