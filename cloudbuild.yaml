@@ -1,5 +1,6 @@
 options:
   dynamicSubstitutions: true
+  logging: CLOUD_LOGGING_ONLY
 
 substitutions:
   _IMAGE: "us-central1-docker.pkg.dev/${PROJECT_ID}/docker/docker-reuse"
