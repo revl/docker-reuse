@@ -38,56 +38,14 @@ func runDockerCmd(quiet bool, arg ...string) error {
 
 // findOrBuildAndPushImage finds an existing image or builds and pushes a new
 // image to the container registry.
-func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
-	placeholderString, dockerfile string, buildArgs []string,
-	quiet bool, additionalTags []string) error {
-
-	templateContents, err := os.ReadFile(templateFilename)
-	if err != nil {
-		return err
-	}
-
-	// Check if the placeholder is explicitly specified on the command line.
-	placeholder := []byte(placeholderString)
-
-	if len(placeholder) != 0 {
-		if !bytes.Contains(templateContents, placeholder) {
-			return fmt.Errorf(
-				"'%s' does not contain occurrences of '%s'",
-				templateFilename, placeholderString)
-		}
-	} else {
-		// Use the image name itself as the placeholder.
-		re := regexp.MustCompile(regexp.QuoteMeta(imageName) +
-			// Image tag may contain lowercase and uppercase
-			// letters, digits, underscores, periods, and dashes.
-			"(?::[-.\\w]+)?")
-
-		imageRefs := re.FindAll(templateContents, -1)
-
-		if len(imageRefs) == 0 {
-			return fmt.Errorf(
-				"'%s' does not contain references to '%s'",
-				templateFilename, imageName)
-		}
-
-		placeholder = imageRefs[0]
-
-		// Check that all references to the image within the template
-		// file are identical.
-		for i := 1; i < len(imageRefs); i++ {
-			if !bytes.Equal(imageRefs[i], placeholder) {
-				return fmt.Errorf("'%s' contains "+
-					"inconsistent references to '%s'",
-					templateFilename, imageName)
-			}
-		}
-	}
+func findOrBuildAndPushImage(workingDir, imageName string,
+	buildArgs []string, dockerfile string, additionalTags []string,
+	quiet bool) (string, error) {
 
 	fingerprint, err := computeFingerprint(
 		workingDir, dockerfile, buildArgs, quiet)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	imageNameWithFingerprint := imageName + ":" + fingerprint
@@ -112,7 +70,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 			if err = runDockerCmd(quiet, "tag",
 				imageNameWithFingerprint,
 				imageNameWithTag); err != nil {
-				return err
+				return "", err
 			}
 			imagesToPush = append(imagesToPush, imageNameWithTag)
 		}
@@ -121,7 +79,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		// assume that the image does not exist.  Abort on all other
 		// errors.
 		if _, ok := err.(*exec.ExitError); !ok {
-			return err
+			return "", err
 		}
 
 		// Build the image.
@@ -142,7 +100,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 			args = append(args, "--build-arg", buildArg)
 		}
 		if err = runDockerCmd(quiet, args...); err != nil {
-			return err
+			return "", err
 		}
 	}
 
@@ -153,48 +111,52 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 			args = append(args, "-q")
 		}
 		if err = runDockerCmd(quiet, args...); err != nil {
-			return err
+			return "", err
 		}
 	}
 
-	newImageRef := []byte(imageNameWithFingerprint)
-
-	// No need to update the output file if it already contains
-	// the right reference.
-	if bytes.Equal(placeholder, newImageRef) {
-		return nil
-	}
-
-	return os.WriteFile(templateFilename,
-		bytes.ReplaceAll(templateContents, placeholder, newImageRef), 0)
+	return imageNameWithFingerprint, nil
 }
 
-var usage = `Usage:  docker-reuse [OPTIONS] PATH IMAGE FILE [ARG...]
+var usage = `Usage:  docker-reuse [OPTIONS] PATH IMAGE [ARG...]
 
 Arguments:
   PATH
     	Docker build context directory
   IMAGE
     	Name of the image to find or build
-  FILE
-    	File to update with the new image tag
   [ARG...]
     	Optional build arguments (format: NAME[=value])
 
 Options:`
 
+func usageError(message string) {
+	fmt.Fprintln(flag.CommandLine.Output(), "Error: "+message)
+	flag.Usage()
+	os.Exit(2)
+}
+
+func errorExit(message string, a ...any) {
+	fmt.Fprintf(os.Stderr, "Error: "+message+"\n", a...)
+	os.Exit(1)
+}
+
 func main() {
 	var dockerfileFlag = flag.String("f", "",
-		"Pathname of the `Dockerfile` (by default, 'PATH/Dockerfile')")
+		"Pathname of the Dockerfile (by default, 'PATH/Dockerfile')")
 
-	var quietFlag = flag.Bool("q", false, "Suppress build output")
+	var templateFilenameFlag = flag.String("u", "",
+		"Template file to update with the new image tag")
 
 	var imagePlaceholderFlag = flag.String("p", "",
-		"Placeholder for the image name in FILE "+
+		"Placeholder for the image name in template file "+
 			"(by default, the image name itself)")
 
-	var tags stringSliceFlag
-	flag.Var(&tags, "t", "Additional tag(s) to apply to the image")
+	var additionalTags stringSliceFlag
+	flag.Var(&additionalTags, "t",
+		"Additional tag(s) to apply to the image")
+
+	var quietFlag = flag.Bool("q", false, "Suppress build output")
 
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), usage)
@@ -203,31 +165,100 @@ func main() {
 
 	flag.Parse()
 
-	args := flag.Args()
-
-	if len(args) < 3 {
-		fmt.Fprintln(flag.CommandLine.Output(),
-			"invalid number of positional arguments")
-		flag.Usage()
-		os.Exit(2)
+	if *imagePlaceholderFlag != "" && *templateFilenameFlag == "" {
+		usageError("-p requires -u")
 	}
 
-	buildArgs := args[3:]
+	args := flag.Args()
+
+	if len(args) < 2 {
+		usageError("invalid number of positional arguments")
+	}
+
+	workingDir, imageName, buildArgs := args[0], args[1], args[2:]
 
 	// Load any missing build argument values from the respective
 	// environment variables.  This job cannot be left to docker
 	// because argument values are part of the image fingerprint.
 	for i, arg := range buildArgs {
 		if !strings.ContainsRune(arg, '=') {
-			buildArgs[i] = arg + "=" + os.Getenv(arg)
+			envValue, found := os.LookupEnv(arg)
+			if !found {
+				errorExit("environment variable %s is not set",
+					arg)
+			}
+			buildArgs[i] = arg + "=" + envValue
 		}
 	}
 
-	if err := findOrBuildAndPushImage(args[0], args[1], args[2],
-		*imagePlaceholderFlag, *dockerfileFlag,
-		buildArgs, *quietFlag, tags); err != nil {
+	if *templateFilenameFlag == "" {
+		if _, err := findOrBuildAndPushImage(
+			workingDir, imageName, buildArgs, *dockerfileFlag,
+			additionalTags, *quietFlag); err != nil {
+			errorExit("%v", err)
+		}
+		return
+	}
 
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	templateContents, err := os.ReadFile(*templateFilenameFlag)
+	if err != nil {
+		errorExit("failed to read template file %s: %v",
+			*templateFilenameFlag, err)
+	}
+
+	// Check if the placeholder is explicitly specified on the
+	// command line.
+	placeholder := []byte(*imagePlaceholderFlag)
+
+	if len(placeholder) == 0 {
+		// Use the image name itself as the placeholder.
+		// Image tag may contain lowercase and uppercase
+		// letters, digits, underscores, periods, and dashes.
+		re := regexp.MustCompile(regexp.QuoteMeta(imageName) +
+			"(?::[-.\\w]+)?")
+
+		imageRefs := re.FindAll(templateContents, -1)
+
+		if len(imageRefs) == 0 {
+			errorExit("'%s' does not contain references to '%s'",
+				*templateFilenameFlag, imageName)
+		}
+
+		placeholder = imageRefs[0]
+
+		// Check that all references to the image within the
+		// template file are identical.
+		for i := 1; i < len(imageRefs); i++ {
+			if !bytes.Equal(imageRefs[i], placeholder) {
+				errorExit("'%s' contains inconsistent "+
+					"references to '%s'",
+					*templateFilenameFlag,
+					imageName)
+			}
+		}
+	} else if !bytes.Contains(templateContents, placeholder) {
+		errorExit("'%s' does not contain occurrences of '%s'",
+			*templateFilenameFlag, *imagePlaceholderFlag)
+	}
+
+	// Find or build the image and get its fingerprint tag.
+	imageNameWithFingerprint, err := findOrBuildAndPushImage(
+		workingDir, imageName, buildArgs, *dockerfileFlag,
+		additionalTags, *quietFlag)
+	if err != nil {
+		errorExit("%v", err)
+	}
+
+	// Skip updating the template file if it already contains
+	// the right reference.
+	if *imagePlaceholderFlag != imageNameWithFingerprint {
+		newTemplateContents := bytes.ReplaceAll(
+			templateContents,
+			placeholder, []byte(imageNameWithFingerprint))
+		if err := os.WriteFile(*templateFilenameFlag,
+			newTemplateContents, 0); err != nil {
+			errorExit("could not overwrite %s: %v",
+				*templateFilenameFlag, err)
+		}
 	}
 }
