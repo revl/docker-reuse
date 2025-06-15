@@ -11,30 +11,30 @@ import (
 // getLastCommitHash returns the hash of the last commit in the subtree of the
 // repository rooted at pathname. It returns an error if the repository cannot
 // be opened or if there are local modifications.
-func getLastCommitHash(pathname string) (string, error) {
+func getLastCommitHash(pathname string) (fingerprint, error) {
 	abs, err := filepath.Abs(pathname)
 	if err != nil {
-		return "", err
+		return fingerprint{}, err
 	}
 
 	r, err := git.PlainOpenWithOptions(abs,
 		&git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
-		return "", err
+		return fingerprint{}, err
 	}
 
 	wt, err := r.Worktree()
 	if err != nil {
-		return "", err
+		return fingerprint{}, err
 	}
 	root := wt.Filesystem.Root()
 
-	// Check if the repository subtree rooted at `pathname` is clean. The last
-	// commit of `pathname` cannot be used as its fingerprint if there are
-	// local modifications.
+	// Check if the repository subtree rooted at `pathname` is clean. The
+	// last commit of `pathname` cannot be used as its fingerprint if there
+	// are local modifications.
 	status, err := wt.Status()
 	if err != nil {
-		return "", err
+		return fingerprint{}, err
 	}
 
 	var clean bool
@@ -67,23 +67,23 @@ func getLastCommitHash(pathname string) (string, error) {
 	}
 
 	if !clean {
-		return "", errors.New("local modifications detected")
+		return fingerprint{}, errors.New("local modifications detected")
 	}
 
 	// Get the last commit hash.
 	commitIter, err := r.Log(logOptions)
 	if err != nil {
-		return "", err
+		return fingerprint{}, err
 	}
 	defer commitIter.Close()
 
 	lastCommit, err := commitIter.Next()
 	if err != nil {
-		return "", err
+		return fingerprint{}, err
 	}
 	if lastCommit == nil {
-		return "", errors.New("no commit history")
+		return fingerprint{}, errors.New("no commit history")
 	}
 
-	return lastCommit.Hash.String(), nil
+	return fingerprint{modeCommit, lastCommit.Hash.String()}, nil
 }

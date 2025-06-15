@@ -38,17 +38,17 @@ func runDockerCmd(quiet bool, arg ...string) error {
 
 // findOrBuildAndPushImage finds an existing image or builds and pushes a new
 // image to the container registry.
-func findOrBuildAndPushImage(workingDir, imageName string,
-	buildArgs []string, dockerfile string, additionalTags []string,
-	quiet bool) (string, error) {
+func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
+	dockerfile string, additionalTags []string,
+	computeFingerprint fingerprintFunc, quiet bool) (string, error) {
 
-	fingerprint, err := computeFingerprint(
-		workingDir, dockerfile, buildArgs, quiet)
+	fingerprint, err := computeImageFingerprint(
+		workingDir, dockerfile, buildArgs, computeFingerprint, quiet)
 	if err != nil {
 		return "", err
 	}
 
-	imageNameWithFingerprint := imageName + ":" + fingerprint
+	imageNameWithFingerprint := imageName + ":" + fingerprint.hash
 	if !quiet {
 		fmt.Println("Fingerprinted image:", imageNameWithFingerprint)
 	}
@@ -156,6 +156,9 @@ func main() {
 	flag.Var(&additionalTags, "t",
 		"Additional tag(s) to apply to the image")
 
+	var modeFlag = flag.String("m", string(modeAuto),
+		"Fingerprinting mode: "+fingerprintModeOptions())
+
 	var quietFlag = flag.Bool("q", false, "Suppress build output")
 
 	flag.Usage = func() {
@@ -167,6 +170,33 @@ func main() {
 
 	if *imagePlaceholderFlag != "" && *templateFilenameFlag == "" {
 		usageError("-p requires -u")
+	}
+
+	var computeFingerprint fingerprintFunc
+
+	switch fingerprintMode(*modeFlag) {
+	case modeCommit:
+		computeFingerprint = getLastCommitHash
+	case modeSHA1:
+		computeFingerprint = hashFiles
+	case modeAuto:
+		computeFingerprint = func(
+			pathname string) (fingerprint, error) {
+
+			fp, err := getLastCommitHash(pathname)
+			if err == nil {
+				return fp, nil
+			}
+
+			fmt.Fprintf(os.Stderr, "Warning: unable to use git "+
+				"commit hash for '%s' - falling back to "+
+				"file content hashing: %v\n", pathname, err)
+
+			return hashFiles(pathname)
+		}
+	default:
+		errorExit("invalid mode: %s; allowed values: %s",
+			*modeFlag, fingerprintModeOptions())
 	}
 
 	args := flag.Args()
@@ -194,7 +224,8 @@ func main() {
 	if *templateFilenameFlag == "" {
 		if _, err := findOrBuildAndPushImage(
 			workingDir, imageName, buildArgs, *dockerfileFlag,
-			additionalTags, *quietFlag); err != nil {
+			additionalTags, computeFingerprint,
+			*quietFlag); err != nil {
 			errorExit("%v", err)
 		}
 		return
@@ -244,7 +275,7 @@ func main() {
 	// Find or build the image and get its fingerprint tag.
 	imageNameWithFingerprint, err := findOrBuildAndPushImage(
 		workingDir, imageName, buildArgs, *dockerfileFlag,
-		additionalTags, *quietFlag)
+		additionalTags, computeFingerprint, *quietFlag)
 	if err != nil {
 		errorExit("%v", err)
 	}
