@@ -12,6 +12,18 @@ import (
 	"strings"
 )
 
+// stringSliceFlag is a custom flag type that allows multiple values
+type stringSliceFlag []string
+
+func (f *stringSliceFlag) String() string {
+	return strings.Join(*f, ", ")
+}
+
+func (f *stringSliceFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
 // runDockerCmd runs a docker command and prints the command to the standard
 // output if not quiet.
 func runDockerCmd(quiet bool, arg ...string) error {
@@ -27,8 +39,8 @@ func runDockerCmd(quiet bool, arg ...string) error {
 // findOrBuildAndPushImage finds an existing image or builds and pushes a new
 // image to the container registry.
 func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
-	placeholderString, dockerfile string,
-	buildArgs []string, quiet bool) error {
+	placeholderString, dockerfile string, buildArgs []string,
+	quiet bool, additionalTags []string) error {
 
 	templateContents, err := os.ReadFile(templateFilename)
 	if err != nil {
@@ -78,27 +90,48 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		return err
 	}
 
-	imageName = imageName + ":" + fingerprint
+	imageNameWithFingerprint := imageName + ":" + fingerprint
 	if !quiet {
-		fmt.Println("Target image:", imageName)
+		fmt.Println("Fingerprinted image:", imageNameWithFingerprint)
 	}
 
-	// Check if the image already exists in the registry
-	err = runDockerCmd(true, "manifest", "inspect", imageName)
-	if err == nil {
+	var imagesToPush []string
+
+	// Check if the image with the fingerprint already exists
+	// in the registry.
+	if err = runDockerCmd(true, "manifest", "inspect",
+		imageNameWithFingerprint); err == nil {
+
 		if !quiet {
 			fmt.Println("Image already exists")
 		}
+
+		// Tag the image with the additional tags.
+		for _, tag := range additionalTags {
+			imageNameWithTag := imageName + ":" + tag
+			if err = runDockerCmd(quiet, "tag",
+				imageNameWithFingerprint,
+				imageNameWithTag); err != nil {
+				return err
+			}
+			imagesToPush = append(imagesToPush, imageNameWithTag)
+		}
 	} else {
-		// If the above command exited with a non-zero code, assume
-		// that the image does not exist. Abort on all other errors.
+		// If the manifest inspect command exited with a non-zero code,
+		// assume that the image does not exist.  Abort on all other
+		// errors.
 		if _, ok := err.(*exec.ExitError); !ok {
 			return err
 		}
 
-		// Build the image and push it to the container registry.
-
-		args := []string{"build", ".", "-t", imageName}
+		// Build the image.
+		args := []string{"build", ".", "-t", imageNameWithFingerprint}
+		imagesToPush = []string{imageNameWithFingerprint}
+		for _, tag := range additionalTags {
+			imageNameWithTag := imageName + ":" + tag
+			args = append(args, "-t", imageNameWithTag)
+			imagesToPush = append(imagesToPush, imageNameWithTag)
+		}
 		if quiet {
 			args = append(args, "-q")
 		}
@@ -111,8 +144,11 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		if err = runDockerCmd(quiet, args...); err != nil {
 			return err
 		}
+	}
 
-		args = []string{"push", imageName}
+	// Push the images to the container registry.
+	for _, imageNameWithTag := range imagesToPush {
+		args := []string{"push", imageNameWithTag}
 		if quiet {
 			args = append(args, "-q")
 		}
@@ -121,7 +157,7 @@ func findOrBuildAndPushImage(workingDir, imageName, templateFilename,
 		}
 	}
 
-	newImageRef := []byte(imageName)
+	newImageRef := []byte(imageNameWithFingerprint)
 
 	// No need to update the output file if it already contains
 	// the right reference.
@@ -157,6 +193,9 @@ func main() {
 		"Placeholder for the image name in FILE "+
 			"(by default, the image name itself)")
 
+	var tags stringSliceFlag
+	flag.Var(&tags, "t", "Additional tag(s) to apply to the image")
+
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), usage)
 		flag.PrintDefaults()
@@ -186,7 +225,7 @@ func main() {
 
 	if err := findOrBuildAndPushImage(args[0], args[1], args[2],
 		*imagePlaceholderFlag, *dockerfileFlag,
-		buildArgs, *quietFlag); err != nil {
+		buildArgs, *quietFlag, tags); err != nil {
 
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
