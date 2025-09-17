@@ -65,6 +65,11 @@ func hashFiles(pathname string) (fingerprint, error) {
 			return nil
 		}
 
+		// Skip all symlinks to avoid following them
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+
 		f, err := os.Open(p)
 		if err != nil {
 			return err

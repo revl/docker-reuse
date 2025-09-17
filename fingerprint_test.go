@@ -74,7 +74,26 @@ func TestHashFiles(t *testing.T) {
 		}
 	}
 
-	// Test hashing
+	// Create a subdirectory
+	subDir := filepath.Join(tempDir, "subdir")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatalf("Failed to create subdir: %v", err)
+	}
+
+	// Create a file in the subdirectory
+	subFile := filepath.Join(subDir, "subfile.txt")
+	if err := os.WriteFile(
+		subFile, []byte("subcontent"), 0644); err != nil {
+		t.Fatalf("Failed to write subfile: %v", err)
+	}
+
+	// Create a symlink to the subdirectory
+	symlinkPath := filepath.Join(tempDir, "symlink_to_dir")
+	if err := os.Symlink("subdir", symlinkPath); err != nil {
+		t.Fatalf("Failed to create symlink: %v", err)
+	}
+
+	// Test hashing - this should not fail with "is a directory" error
 	fp, err := hashFiles(tempDir)
 	if err != nil {
 		t.Fatalf("hashFiles() error = %v", err)
