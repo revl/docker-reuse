@@ -53,8 +53,6 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 		fmt.Println("Fingerprinted image:", imageNameWithFingerprint)
 	}
 
-	var imagesToPush []string
-
 	// Check if the image with the fingerprint already exists
 	// in the registry.
 	if err = runDockerCmd(true, "manifest", "inspect",
@@ -65,17 +63,20 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 		}
 
 		// Tag the image with the additional tags.
-		for _, tag := range additionalTags {
-			imageNameWithTag := imageName + ":" + tag
-			if err = runDockerCmd(quiet, "tag",
-				imageNameWithFingerprint,
-				imageNameWithTag); err != nil {
+		if len(additionalTags) > 0 {
+			args := []string{"buildx", "imagetools", "create",
+				imageNameWithFingerprint}
+			for _, tag := range additionalTags {
+				args = append(args, "--tag", imageName+":"+tag)
+			}
+			if err = runDockerCmd(quiet, args...); err != nil {
 				return "", fmt.Errorf(
 					"failed to tag the image: %v", err)
 			}
-			imagesToPush = append(imagesToPush, imageNameWithTag)
 		}
 	} else {
+		var imagesToPush []string
+
 		// If the manifest inspect command exited with a non-zero code,
 		// assume that the image does not exist.  Abort on all other
 		// errors.
@@ -104,17 +105,17 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 			return "", fmt.Errorf(
 				"failed to build the image: %v", err)
 		}
-	}
 
-	// Push the images to the container registry.
-	for _, imageNameWithTag := range imagesToPush {
-		args := []string{"push", imageNameWithTag}
-		if quiet {
-			args = append(args, "-q")
-		}
-		if err = runDockerCmd(quiet, args...); err != nil {
-			return "", fmt.Errorf(
-				"failed to push the image: %v", err)
+		// Push the images to the container registry.
+		for _, imageNameWithTag := range imagesToPush {
+			args := []string{"push", imageNameWithTag}
+			if quiet {
+				args = append(args, "-q")
+			}
+			if err = runDockerCmd(quiet, args...); err != nil {
+				return "", fmt.Errorf(
+					"failed to push the image: %v", err)
+			}
 		}
 	}
 
