@@ -46,7 +46,8 @@ func fingerprintFromSHA1(h hash.Hash) fingerprint {
 }
 
 // hashFiles hashes the files in the given pathname using SHA1 and returns
-// the hashsum as a hexadecimal string.
+// the hashsum as a hexadecimal string. Files are processed in lexical order
+// as guaranteed by filepath.Walk.
 func hashFiles(pathname string) (fingerprint, error) {
 	h := sha1.New()
 
