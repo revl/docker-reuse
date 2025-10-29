@@ -85,7 +85,8 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 		}
 
 		// Build the image.
-		args := []string{"build", ".", "-t", imageNameWithFingerprint}
+		args := []string{"build", workingDir,
+			"-t", imageNameWithFingerprint}
 		imagesToPush = []string{imageNameWithFingerprint}
 		for _, tag := range additionalTags {
 			imageNameWithTag := imageName + ":" + tag
