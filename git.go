@@ -2,11 +2,31 @@ package main
 
 import (
 	"errors"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
 )
+
+// isPathClean checks if a specific path in the git repository is clean
+// (has no modifications) using the native git command, which is much faster
+// than using go-git's Status() method.
+func isPathClean(repoRoot, path string) (bool, error) {
+	// Use git status --porcelain to check for any changes (modified,
+	// staged, or untracked) in the specified path.
+	cmd := exec.Command("git", "status", "--porcelain",
+		"--untracked-files=all", "--", path)
+	cmd.Dir = repoRoot
+	output, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+
+	// If there's any output, the path is not clean
+	// (has modified, staged, or untracked files)
+	return strings.TrimSpace(string(output)) == "", nil
+}
 
 // getLastCommitHash returns the hash of the last commit in the subtree of the
 // repository rooted at pathname. It returns an error if the repository cannot
@@ -32,11 +52,6 @@ func getLastCommitHash(pathname string) (fingerprint, error) {
 	// Check if the repository subtree rooted at `pathname` is clean. The
 	// last commit of `pathname` cannot be used as its fingerprint if there
 	// are local modifications.
-	status, err := wt.Status()
-	if err != nil {
-		return fingerprint{}, err
-	}
-
 	var clean bool
 
 	logOptions := &git.LogOptions{}
@@ -53,17 +68,17 @@ func getLastCommitHash(pathname string) (fingerprint, error) {
 			return strings.HasPrefix(s, rel)
 		}
 
-		clean = true
-		for f, s := range status {
-			if (s.Worktree != git.Unmodified ||
-				s.Staging != git.Unmodified) &&
-				strings.HasPrefix(f, rel) {
-				clean = false
-				break
-			}
+		// Check status for only the specific path
+		clean, err = isPathClean(root, rel)
+		if err != nil {
+			return fingerprint{}, err
 		}
 	} else {
-		clean = status.IsClean()
+		// Check status for the entire repository
+		clean, err = isPathClean(root, ".")
+		if err != nil {
+			return fingerprint{}, err
+		}
 	}
 
 	if !clean {
