@@ -40,10 +40,12 @@ func runDockerCmd(quiet bool, arg ...string) error {
 // image to the container registry.
 func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 	dockerfile string, additionalTags []string,
-	computeFingerprint fingerprintFunc, quiet bool) (string, error) {
+	computeFingerprint fingerprintFunc, platform string,
+	quiet bool) (string, error) {
 
 	fingerprint, err := computeImageFingerprint(
-		workingDir, dockerfile, buildArgs, computeFingerprint, quiet)
+		workingDir, dockerfile, buildArgs, computeFingerprint,
+		platform, quiet)
 	if err != nil {
 		return "", err
 	}
@@ -92,6 +94,9 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 			imageNameWithTag := imageName + ":" + tag
 			args = append(args, "-t", imageNameWithTag)
 			imagesToPush = append(imagesToPush, imageNameWithTag)
+		}
+		if platform != "" {
+			args = append(args, "--platform", platform)
 		}
 		if quiet {
 			args = append(args, "-q")
@@ -229,6 +234,9 @@ func main() {
 	var modeFlag = flag.String("m", string(modeAuto),
 		"Fingerprinting mode: "+fingerprintModeOptions())
 
+	var platformFlag = flag.String("platform", "",
+		"Target platform for the image (e.g., linux/amd64)")
+
 	var quietFlag = flag.Bool("q", false, "Suppress build output")
 
 	flag.Usage = func() {
@@ -296,7 +304,7 @@ func main() {
 		if _, err := findOrBuildAndPushImage(
 			workingDir, imageName, buildArgs, *dockerfileFlag,
 			additionalTags, computeFingerprint,
-			*quietFlag); err != nil {
+			*platformFlag, *quietFlag); err != nil {
 			errorExit(err)
 		}
 		return
@@ -317,7 +325,7 @@ func main() {
 	// Find or build the image and get its fingerprint tag.
 	fingerprintedImageName, err := findOrBuildAndPushImage(
 		workingDir, imageName, buildArgs, *dockerfileFlag,
-		additionalTags, computeFingerprint, *quietFlag)
+		additionalTags, computeFingerprint, *platformFlag, *quietFlag)
 	if err != nil {
 		errorExit(err)
 	}

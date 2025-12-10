@@ -121,10 +121,11 @@ func parseAndHashDockerfile(dockerfile string) ([]string, fingerprint, error) {
 type fingerprintFunc func(pathname string) (fingerprint, error)
 
 // computeImageFingerprint computes the fingerprint of the Dockerfile, all
-// sources from it, and the build arguments using SHA1 and returns the
-// fingerprint as a hexadecimal string.
+// sources from it, the build arguments, and the platform (if specified) using
+// SHA1 and returns the fingerprint as a hexadecimal string.
 func computeImageFingerprint(workingDir, dockerfile string, buildArgs []string,
-	computeFingerprint fingerprintFunc, quiet bool) (fingerprint, error) {
+	computeFingerprint fingerprintFunc, platform string,
+	quiet bool) (fingerprint, error) {
 
 	workingDir = filepath.Clean(workingDir)
 
@@ -195,6 +196,14 @@ func computeImageFingerprint(workingDir, dockerfile string, buildArgs []string,
 			fmt.Println("Arg:", buildArg)
 		}
 		h.Write([]byte(buildArg))
+		h.Write([]byte("\n"))
+	}
+
+	if platform != "" {
+		if !quiet {
+			fmt.Println("Platform:", platform)
+		}
+		h.Write([]byte(platform))
 		h.Write([]byte("\n"))
 	}
 
