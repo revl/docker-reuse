@@ -4,25 +4,14 @@ package main
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/revl/verbs"
 )
-
-// stringSliceFlag is a custom flag type that allows multiple values
-type stringSliceFlag []string
-
-func (f *stringSliceFlag) String() string {
-	return strings.Join(*f, ", ")
-}
-
-func (f *stringSliceFlag) Set(value string) error {
-	*f = append(*f, value)
-	return nil
-}
 
 // runDockerCmd runs a docker command and prints the command to the standard
 // output if not quiet.
@@ -187,24 +176,6 @@ func readTemplateFile(filename, imageName, placeholderString string) (
 	return result, nil
 }
 
-var usage = `Usage:  docker-reuse [OPTIONS] PATH IMAGE [ARG...]
-
-Arguments:
-  PATH
-    	Docker build context directory
-  IMAGE
-    	Name of the image to find or build
-  [ARG...]
-    	Optional build arguments (format: NAME[=value])
-
-Options:`
-
-func usageError(message string) {
-	fmt.Fprintln(flag.CommandLine.Output(), "Error: "+message)
-	flag.Usage()
-	os.Exit(2)
-}
-
 func errorExit(err error) {
 	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 	os.Exit(1)
@@ -215,44 +186,120 @@ func fmtErrorExit(format string, a ...any) {
 	os.Exit(1)
 }
 
+var dockerfileFlag string
+var templateFilenames []string
+var imagePlaceholderFlag string
+var additionalTags []string
+var modeFlag string
+var platformFlag string
+var quietFlag bool
+var workingDir string
+var imageName string
+var buildArgs []string
+
+var cli = &verbs.CLI{
+	Summary: "Find or build and push Docker images with fingerprinting",
+	Options: []*verbs.Option{
+		{
+			Name:  "f|dockerfile",
+			Param: "FILE",
+			Description: "Path to the Dockerfile" +
+				"(by default, 'PATH/Dockerfile')",
+			Tag: &dockerfileFlag,
+		},
+		{
+			Name:  "u|update-in-place",
+			Param: "FILE",
+			Description: "Template file(s) to update with " +
+				"the new image tag",
+			Tag: &templateFilenames,
+		},
+		{
+			Name:  "p|placeholder",
+			Param: "STRING",
+			Description: "Placeholder for the image " +
+				"name in the file specified by -u " +
+				"(by default, the image name itself)",
+			Tag: &imagePlaceholderFlag,
+		},
+		{
+			Name:  "t|tag",
+			Param: "STRING",
+			Description: "Additional tag to use for the image" +
+				"(by default, only the 160-bit fingerprint " +
+				"computed from the image sources is used)",
+			Tag: &additionalTags,
+		},
+		{
+			Name:  "m|mode",
+			Param: "MODE",
+			Description: "Fingerprinting mode: " +
+				fingerprintModeOptions(),
+			Tag: &modeFlag,
+		},
+		{
+			Name:  "platform",
+			Param: "PLATFORM",
+			Description: "Target platform for the image " +
+				"(e.g., linux/amd64)",
+			Tag: &platformFlag,
+		},
+		{
+			Name:        "q|quiet",
+			Description: "Suppress build output",
+			Tag:         &quietFlag,
+		},
+	},
+	Args: []*verbs.Arg{
+		{
+			Name:        "PATH",
+			Description: "Docker build context directory",
+			Tag:         &workingDir,
+		},
+		{
+			Name:        "IMAGE",
+			Description: "Name of the image to find or build",
+			Tag:         &imageName,
+		},
+		{
+			Name: "ARG",
+			Description: "Optional build arguments " +
+				"(format: NAME[=value])",
+			Occurrence: verbs.ZeroOrMore,
+			Tag:        &buildArgs,
+		},
+	},
+}
+
 func main() {
-	var dockerfileFlag = flag.String("f", "",
-		"Pathname of the Dockerfile (by default, 'PATH/Dockerfile')")
+	parseResult := verbs.NewParser(cli).Parse(os.Args)
 
-	var templateFilenames stringSliceFlag
-	flag.Var(&templateFilenames, "u",
-		"Template file(s) to update with the new image tag")
+	var placeholderOptionToken string
 
-	var imagePlaceholderFlag = flag.String("p", "",
-		"Placeholder for the image name in template file "+
-			"(by default, the image name itself)")
+	for _, opt := range parseResult.OptsAndArgs {
+		switch opt.Tag.(type) {
+		case *string:
+			*opt.Tag.(*string) = opt.Value
+		case *[]string:
+			*opt.Tag.(*[]string) =
+				append(*opt.Tag.(*[]string), opt.Value)
+		case *bool:
+			*opt.Tag.(*bool) = true
+		}
 
-	var additionalTags stringSliceFlag
-	flag.Var(&additionalTags, "t",
-		"Additional tag(s) to apply to the image")
-
-	var modeFlag = flag.String("m", string(modeAuto),
-		"Fingerprinting mode: "+fingerprintModeOptions())
-
-	var platformFlag = flag.String("platform", "",
-		"Target platform for the image (e.g., linux/amd64)")
-
-	var quietFlag = flag.Bool("q", false, "Suppress build output")
-
-	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), usage)
-		flag.PrintDefaults()
+		if opt.Tag == &imagePlaceholderFlag {
+			placeholderOptionToken = opt.Token
+		}
 	}
 
-	flag.Parse()
-
-	if *imagePlaceholderFlag != "" && len(templateFilenames) == 0 {
-		usageError("-p requires -u")
+	if imagePlaceholderFlag != "" && len(templateFilenames) == 0 {
+		parseResult.HandleError(fmt.Errorf("%s requires -u",
+			placeholderOptionToken))
 	}
 
 	var computeFingerprint fingerprintFunc
 
-	switch fingerprintMode(*modeFlag) {
+	switch fingerprintMode(modeFlag) {
 	case modeCommit:
 		computeFingerprint = getLastCommitHash
 	case modeSHA1:
@@ -273,17 +320,10 @@ func main() {
 			return hashFiles(pathname)
 		}
 	default:
-		fmtErrorExit("invalid mode: %s; allowed values: %s",
-			*modeFlag, fingerprintModeOptions())
+		parseResult.HandleError(fmt.Errorf(
+			"invalid mode: %s; allowed values: %s",
+			modeFlag, fingerprintModeOptions()))
 	}
-
-	args := flag.Args()
-
-	if len(args) < 2 {
-		usageError("invalid number of positional arguments")
-	}
-
-	workingDir, imageName, buildArgs := args[0], args[1], args[2:]
 
 	// Load any missing build argument values from the respective
 	// environment variables.  This job cannot be left to docker
@@ -302,9 +342,9 @@ func main() {
 
 	if len(templateFilenames) == 0 {
 		if _, err := findOrBuildAndPushImage(
-			workingDir, imageName, buildArgs, *dockerfileFlag,
+			workingDir, imageName, buildArgs, dockerfileFlag,
 			additionalTags, computeFingerprint,
-			*platformFlag, *quietFlag); err != nil {
+			platformFlag, quietFlag); err != nil {
 			errorExit(err)
 		}
 		return
@@ -315,7 +355,7 @@ func main() {
 
 	for _, fn := range templateFilenames {
 		tf, err := readTemplateFile(
-			fn, imageName, *imagePlaceholderFlag)
+			fn, imageName, imagePlaceholderFlag)
 		if err != nil {
 			errorExit(err)
 		}
@@ -324,8 +364,8 @@ func main() {
 
 	// Find or build the image and get its fingerprint tag.
 	fingerprintedImageName, err := findOrBuildAndPushImage(
-		workingDir, imageName, buildArgs, *dockerfileFlag,
-		additionalTags, computeFingerprint, *platformFlag, *quietFlag)
+		workingDir, imageName, buildArgs, dockerfileFlag,
+		additionalTags, computeFingerprint, platformFlag, quietFlag)
 	if err != nil {
 		errorExit(err)
 	}

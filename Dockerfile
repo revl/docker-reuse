@@ -1,4 +1,4 @@
-FROM golang:1.18 AS build
+FROM golang:1.21 AS build
 COPY . /workdir
 WORKDIR /workdir
 RUN go build -v

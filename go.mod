@@ -1,10 +1,13 @@
 module github.com/revl/docker-reuse
 
-go 1.18
+go 1.21.0
+
+toolchain go1.24.4
 
 require (
 	github.com/go-git/go-git/v5 v5.2.0
 	github.com/moby/buildkit v0.8.1
+	github.com/revl/verbs v1.0.0
 )
 
 require (
