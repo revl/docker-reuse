@@ -117,63 +117,92 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 	return imageNameWithFingerprint, nil
 }
 
+type templateFileStatus int
+
+const (
+	// The placeholder check has been performed in the template file.
+	placeholderChecked templateFileStatus = iota + 1
+	// The template file already contains the new image tag.
+	contentsUnchanged
+	// The placeholder has been replaced with the new image tag.
+	placeholderReplaced
+)
+
 // templateFile represents a template file.
 type templateFile struct {
 	filename    string
 	contents    []byte
 	placeholder []byte
+	status      templateFileStatus
 }
 
-// readTemplateFile reads the template file and returns its contents and the
-// placeholder for the fingerprinted image name.
-func readTemplateFile(filename, imageName, placeholderString string) (
-	templateFile, error) {
-
-	result := templateFile{
-		filename:    filename,
-		placeholder: []byte(placeholderString),
-	}
-	var err error
-
-	result.contents, err = os.ReadFile(filename)
-	if err != nil {
-		return templateFile{}, fmt.Errorf(
-			"failed to read template file %s: %v", filename, err)
+// checkPlaceholder ensures that the placeholder for the new image tag exists
+// in the file and is consistent across all occurrences in the template file
+// if the placeholder is the image name itself.
+func (tf *templateFile) checkPlaceholder(imageName string) error {
+	// Return early if this template file was already checked via a
+	// previous target file.
+	if tf.status >= placeholderChecked {
+		return nil
 	}
 
-	if len(result.placeholder) == 0 {
+	if len(tf.placeholder) == 0 {
 		// Use the image name itself as the placeholder.
 		// Image tag may contain lowercase and uppercase
 		// letters, digits, underscores, periods, and dashes.
 		re := regexp.MustCompile(
 			regexp.QuoteMeta(imageName) + "(?::[-.\\w]+)?")
 
-		imageRefs := re.FindAll(result.contents, -1)
+		imageRefs := re.FindAll(tf.contents, -1)
 
 		if len(imageRefs) == 0 {
-			return templateFile{}, fmt.Errorf(
+			return fmt.Errorf(
 				"'%s' does not contain the image name '%s'",
-				filename, imageName)
+				tf.filename, imageName)
 		}
 
-		result.placeholder = imageRefs[0]
+		tf.placeholder = imageRefs[0]
 
 		// Check that all references to the image within the
 		// template file are identical.
 		for i := 1; i < len(imageRefs); i++ {
-			if !bytes.Equal(imageRefs[i], result.placeholder) {
-				return templateFile{}, fmt.Errorf(
-					"'%s' contains different tags for '%s'",
-					filename, imageName)
+			if !bytes.Equal(imageRefs[i], tf.placeholder) {
+				return fmt.Errorf("'%s' contains "+
+					"inconsistent tags for '%s'",
+					tf.filename, imageName)
 			}
 		}
-	} else if !bytes.Contains(result.contents, result.placeholder) {
-		return templateFile{}, fmt.Errorf(
-			"'%s' does not contain occurrences of '%s'",
-			filename, placeholderString)
+	} else if !bytes.Contains(tf.contents, tf.placeholder) {
+		return fmt.Errorf("'%s' does not contain occurrences of '%s'",
+			tf.filename, tf.placeholder)
 	}
 
-	return result, nil
+	tf.status = placeholderChecked
+	return nil
+}
+
+// replacePlaceholder replaces the placeholder with the new image tag in the
+// template file and returns true if the file's contents were changed.
+func (tf *templateFile) replacePlaceholder(fingerprintedImageName []byte) {
+	if tf.status < contentsUnchanged {
+		// Skip updating the template file if it already contains the
+		// right reference.
+		if bytes.Equal(tf.placeholder, fingerprintedImageName) {
+			tf.status = contentsUnchanged
+		} else {
+			tf.contents = bytes.ReplaceAll(tf.contents,
+				tf.placeholder, fingerprintedImageName)
+
+			tf.status = placeholderReplaced
+		}
+	}
+}
+
+// targetFile represents a target file to overwrite with the template file's
+// content where the placeholder is substituted with the new image tag.
+type targetFile struct {
+	filename string
+	template *templateFile
 }
 
 func errorExit(err error) {
@@ -186,9 +215,12 @@ func fmtErrorExit(format string, a ...any) {
 	os.Exit(1)
 }
 
+var placeholderOptionTag = new(struct{})
+var templateOptionTag = new(struct{})
+var writeToOptionTag = new(struct{})
+var updateInPlaceOptionTag = new(struct{})
+
 var dockerfileFlag string
-var templateFilenames []string
-var imagePlaceholderFlag string
 var additionalTags []string
 var modeFlag string
 var platformFlag string
@@ -203,45 +235,64 @@ var cli = &verbs.CLI{
 		{
 			Name:  "f|dockerfile",
 			Param: "FILE",
-			Description: "Path to the Dockerfile" +
-				"(by default, 'PATH/Dockerfile')",
+			Description: "Path to the Dockerfile " +
+				"(by default, 'PATH/Dockerfile')\n",
 			Tag: &dockerfileFlag,
-		},
-		{
-			Name:  "u|update-in-place",
-			Param: "FILE",
-			Description: "Template file(s) to update with " +
-				"the new image tag",
-			Tag: &templateFilenames,
 		},
 		{
 			Name:  "p|placeholder",
 			Param: "STRING",
-			Description: "Placeholder for the image " +
-				"name in the file specified by -u " +
-				"(by default, the image name itself)",
-			Tag: &imagePlaceholderFlag,
+			Description: "Placeholder for the new image name " +
+				"in the file specified by --template or " +
+				"--update-in-place (by default, the image " +
+				"name itself, including the tag)\n",
+			Tag: &placeholderOptionTag,
+		},
+		{
+			Name:  "template",
+			Param: "FILE",
+			Description: "Template file to use for the next " +
+				"--write-to operation\n",
+			Tag: &templateOptionTag,
+		},
+		{
+			Name:  "write-to",
+			Param: "FILE",
+			Description: "File to overwrite with the template " +
+				"file's content where the placeholder is " +
+				"replaced with the new image tag. " +
+				"Requires --template to be specified " +
+				"earlier in the command line.\n",
+			Tag: &writeToOptionTag,
+		},
+		{
+			Name:  "u|update-in-place",
+			Param: "FILE",
+			Description: "File to read and update in place with " +
+				"the new image tag (equivalent to --template " +
+				"and --write-to pointing to the same file).\n",
+			Tag: &updateInPlaceOptionTag,
 		},
 		{
 			Name:  "t|tag",
 			Param: "STRING",
-			Description: "Additional tag to use for the image" +
+			Description: "Additional tag to use for the image " +
 				"(by default, only the 160-bit fingerprint " +
-				"computed from the image sources is used)",
+				"computed from the image sources is used)\n",
 			Tag: &additionalTags,
 		},
 		{
 			Name:  "m|mode",
 			Param: "MODE",
 			Description: "Fingerprinting mode: " +
-				fingerprintModeOptions(),
+				fingerprintModeOptions() + "\n",
 			Tag: &modeFlag,
 		},
 		{
 			Name:  "platform",
 			Param: "PLATFORM",
 			Description: "Target platform for the image " +
-				"(e.g., linux/amd64)",
+				"(e.g., linux/amd64)\n",
 			Tag: &platformFlag,
 		},
 		{
@@ -274,27 +325,67 @@ var cli = &verbs.CLI{
 func main() {
 	parseResult := verbs.NewParser(cli).Parse(os.Args)
 
+	var placeholder []byte
 	var placeholderOptionToken string
+	var lastTemplateFile *templateFile
+	var targetFiles []targetFile
 
-	for _, opt := range parseResult.OptsAndArgs {
-		switch opt.Tag.(type) {
-		case *string:
-			*opt.Tag.(*string) = opt.Value
-		case *[]string:
-			*opt.Tag.(*[]string) =
-				append(*opt.Tag.(*[]string), opt.Value)
-		case *bool:
-			*opt.Tag.(*bool) = true
+	newTemplateFile := func(filename string) *templateFile {
+		contents, err := os.ReadFile(filename)
+		if err != nil {
+			fmtErrorExit("could not read template file: %v", err)
 		}
-
-		if opt.Tag == &imagePlaceholderFlag {
-			placeholderOptionToken = opt.Token
+		return &templateFile{
+			filename:    filename,
+			contents:    contents,
+			placeholder: placeholder,
 		}
 	}
 
-	if imagePlaceholderFlag != "" && len(templateFilenames) == 0 {
-		parseResult.HandleError(fmt.Errorf("%s requires -u",
+	addTargetFile := func(filename string, template *templateFile) {
+		targetFiles = append(targetFiles, targetFile{
+			filename: filename,
+			template: template,
+		})
+	}
+
+	for _, opt := range parseResult.OptsAndArgs {
+		switch opt.Tag {
+		case &placeholderOptionTag:
+			placeholder = []byte(opt.Value)
+			placeholderOptionToken = opt.Token
+		case &templateOptionTag:
+			lastTemplateFile = newTemplateFile(opt.Value)
+		case &writeToOptionTag:
+			if lastTemplateFile == nil {
+				parseResult.HandleError(fmt.Errorf(
+					"%s requires --template to be defined",
+					opt.Token))
+			}
+			addTargetFile(opt.Value, lastTemplateFile)
+		case &updateInPlaceOptionTag:
+			addTargetFile(opt.Value, newTemplateFile(opt.Value))
+		default:
+			switch opt.Tag.(type) {
+			case *string:
+				*opt.Tag.(*string) = opt.Value
+			case *[]string:
+				*opt.Tag.(*[]string) =
+					append(*opt.Tag.(*[]string), opt.Value)
+			case *bool:
+				*opt.Tag.(*bool) = true
+			}
+		}
+	}
+
+	if placeholder != nil && lastTemplateFile == nil {
+		parseResult.HandleError(fmt.Errorf("%s has no effect "+
+			"without --template or --update-in-place",
 			placeholderOptionToken))
+	}
+	if lastTemplateFile != nil && len(targetFiles) == 0 {
+		parseResult.HandleError(fmt.Errorf(
+			"--template has no effect without --write-to"))
 	}
 
 	var computeFingerprint fingerprintFunc
@@ -340,26 +431,13 @@ func main() {
 		}
 	}
 
-	if len(templateFilenames) == 0 {
-		if _, err := findOrBuildAndPushImage(
-			workingDir, imageName, buildArgs, dockerfileFlag,
-			additionalTags, computeFingerprint,
-			platformFlag, quietFlag); err != nil {
+	// Check that the placeholders actually exist in their template files
+	// before building the image. Use the image name as the placeholder
+	// if no placeholder was specified.
+	for _, tf := range targetFiles {
+		if err := tf.template.checkPlaceholder(imageName); err != nil {
 			errorExit(err)
 		}
-		return
-	}
-
-	// Read all template files.
-	var templateFiles []templateFile
-
-	for _, fn := range templateFilenames {
-		tf, err := readTemplateFile(
-			fn, imageName, imagePlaceholderFlag)
-		if err != nil {
-			errorExit(err)
-		}
-		templateFiles = append(templateFiles, tf)
 	}
 
 	// Find or build the image and get its fingerprint tag.
@@ -370,18 +448,18 @@ func main() {
 		errorExit(err)
 	}
 
-	for _, tf := range templateFiles {
-		// Skip updating the template file if it already contains
-		// the right reference.
-		if bytes.Equal(tf.placeholder, []byte(fingerprintedImageName)) {
+	for _, tf := range targetFiles {
+		tf.template.replacePlaceholder([]byte(fingerprintedImageName))
+
+		// Skip unchanged update-in-place files.
+		if tf.template.status == contentsUnchanged &&
+			tf.template.filename == tf.filename {
 			continue
 		}
 
 		// Replace the placeholder with the fingerprinted image name.
 		if err = os.WriteFile(tf.filename,
-			bytes.ReplaceAll(tf.contents, tf.placeholder,
-				[]byte(fingerprintedImageName)),
-			0); err != nil {
+			tf.template.contents, 0600); err != nil {
 			fmtErrorExit("could not overwrite %s: %v",
 				tf.filename, err)
 		}
