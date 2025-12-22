@@ -92,14 +92,20 @@ Options:
   Fingerprinting mode &mdash; one of the following:
 
   - `commit` &mdash; use the commit hash as the fingerprint
-  - `sha1` &mdash; compute the SHA1 hash of the source files and use the combined
-    hash as the fingerprint
+  - `sha1` &mdash; compute the SHA1 hash of the source files and use the
+    combined hash as the fingerprint
   - `auto` &mdash; use the commit hash if available, otherwise fall back to
     `sha1`
 
 - `--platform PLATFORM`
 
   Target platform for the image (e.g., `linux/amd64`).
+
+- `--check-local-cache`
+
+  If the target image already exists in the local cache, assume it also exists
+  in the registry and skip pushing it to the registry. This is an optimization
+  shortcut for faster local builds and should be used with caution.
 
 ### Example
 

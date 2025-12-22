@@ -25,12 +25,39 @@ func runDockerCmd(quiet bool, arg ...string) error {
 	return cmd.Run()
 }
 
+// checkImageExists checks if the image with the fingerprint already exists.
+// It skips checking the registry if checkLocalCache is true.
+func checkImageExists(imageNameWithFingerprint string,
+	checkLocalCache bool) (bool, error) {
+	if checkLocalCache {
+		err := runDockerCmd(true, "image", "inspect", "-f", "{{.Id}}",
+			imageNameWithFingerprint)
+		if err == nil {
+			return true, nil
+		}
+		if _, ok := err.(*exec.ExitError); !ok {
+			return false, err
+		}
+	}
+
+	err := runDockerCmd(true, "manifest", "inspect",
+		imageNameWithFingerprint)
+	if err == nil {
+		return true, nil
+	}
+	if _, ok := err.(*exec.ExitError); !ok {
+		return false, err
+	}
+
+	return false, nil
+}
+
 // findOrBuildAndPushImage finds an existing image or builds and pushes a new
 // image to the container registry.
 func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 	dockerfile string, additionalTags []string,
 	computeFingerprint fingerprintFunc, platform string,
-	quiet bool) (string, error) {
+	checkLocalCache, quiet bool) (string, error) {
 
 	fingerprint, err := computeImageFingerprint(
 		workingDir, dockerfile, buildArgs, computeFingerprint,
@@ -44,11 +71,13 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 		fmt.Println("Fingerprinted image:", imageNameWithFingerprint)
 	}
 
-	// Check if the image with the fingerprint already exists
-	// in the registry.
-	if err = runDockerCmd(true, "manifest", "inspect",
-		imageNameWithFingerprint); err == nil {
+	imageExists, err := checkImageExists(
+		imageNameWithFingerprint, checkLocalCache)
+	if err != nil {
+		return "", err
+	}
 
+	if imageExists {
 		if !quiet {
 			fmt.Println("Image already exists")
 		}
@@ -67,13 +96,6 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 		}
 	} else {
 		var imagesToPush []string
-
-		// If the manifest inspect command exited with a non-zero code,
-		// assume that the image does not exist.  Abort on all other
-		// errors.
-		if _, ok := err.(*exec.ExitError); !ok {
-			return "", err
-		}
 
 		// Build the image.
 		args := []string{"build", workingDir,
@@ -224,6 +246,7 @@ var dockerfileFlag string
 var additionalTags []string
 var modeFlag string
 var platformFlag string
+var checkLocalCacheFlag bool
 var quietFlag bool
 var workingDir string
 var imageName string
@@ -294,6 +317,12 @@ var cli = &verbs.CLI{
 			Description: "Target platform for the image " +
 				"(e.g., linux/amd64)\n",
 			Tag: &platformFlag,
+		},
+		{
+			Name: "check-local-cache",
+			Description: "Skip pushing the image to the registry " +
+				"if it exists in the local cache.\n",
+			Tag: &checkLocalCacheFlag,
 		},
 		{
 			Name:        "q|quiet",
@@ -443,7 +472,8 @@ func main() {
 	// Find or build the image and get its fingerprint tag.
 	fingerprintedImageName, err := findOrBuildAndPushImage(
 		workingDir, imageName, buildArgs, dockerfileFlag,
-		additionalTags, computeFingerprint, platformFlag, quietFlag)
+		additionalTags, computeFingerprint, platformFlag,
+		checkLocalCacheFlag, quietFlag)
 	if err != nil {
 		errorExit(err)
 	}
