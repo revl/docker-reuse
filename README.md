@@ -52,29 +52,42 @@ Positional arguments are:
 
 Options:
 
-- `-f Dockerfile`
+- `-f, --dockerfile=FILE`
 
   Pathname of the Dockerfile (Default is `PATH/Dockerfile`)
 
-- `-p PLACEHOLDER`
+- `-p, --placeholder=PLACEHOLDER`
 
-  Placeholder for the image name in the file specified by `-u` (by default,
-  the image name itself).
+  Placeholder for the new image name in the file specified by `--template` or
+  `--update-in-place` (by default, the image name itself, including the tag).
 
-- `-q`
+- `--template FILE`
+
+  Template file to use for the next `--write-to` operation.
+
+- `--write-to FILE`
+
+  File to overwrite with the template file's content where the placeholder is
+  replaced with the new image tag. Requires `--template` to be specified
+  earlier in the command line.
+
+- `-u, --update-in-place=FILE`
+
+  File to read and update in place with the new image tag (equivalent to
+  `--template` and `--write-to` pointing to the same file). Can be specified
+  multiple times.
+
+- `-q, --quiet`
 
   Suppress build output
 
-- `-u FILE`
+- `-t, --tag=TAG`
 
-  File to update with the new image tag. Can be specified multiple times.
+  Additional tag to use for the image (by default, only the 160-bit
+  fingerprint computed from the image sources is used). Can be specified
+  multiple times.
 
-- `-t TAG`
-
-  Tag to use for the image (by default, a 160-bit fingerprint computed from
-  the sources is the only tag used). Can be specified multiple times.
-
-- `-m MDOE`
+- `-m, --mode=MODE`
 
   Fingerprinting mode &mdash; one of the following:
 
@@ -84,11 +97,15 @@ Options:
   - `auto` &mdash; use the commit hash if available, otherwise fall back to
     `sha1`
 
+- `--platform PLATFORM`
+
+  Target platform for the image (e.g., `linux/amd64`).
+
 ### Example
 
     docker-reuse \
         -f ./docker/myapp/Dockerfile \
-        -u ./kubernetes/myapp/deployment.yaml \
+        --update-in-place ./kubernetes/myapp/deployment.yaml \
         -t v1.0.0 \
         -m sha1 \
         ./src/myapp \
@@ -111,7 +128,7 @@ Here's an example of a trivial but complete `cloudbuild.yaml`:
         args: [
             "-f",
             "docker/hello-world/Dockerfile",
-            "-u",
+            "--update-in-place",
             "kubernetes/hello-world/deployment.yaml", # the file to update
             "-p",
             "IMAGE_PLACEHOLDER", # the string to replace in deployment.yaml
