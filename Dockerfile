@@ -1,7 +1,7 @@
 FROM golang:1.21 AS build
 COPY . /workdir
 WORKDIR /workdir
-RUN go build -v
+RUN CGO_ENABLED=0 go build -v
 
 FROM build AS test
 WORKDIR /workdir
