@@ -5,10 +5,12 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/revl/verbs"
 )
@@ -139,35 +141,17 @@ func findOrBuildAndPushImage(workingDir, imageName string, buildArgs []string,
 	return imageNameWithFingerprint, nil
 }
 
-type templateFileStatus int
-
-const (
-	// The placeholder check has been performed in the template file.
-	placeholderChecked templateFileStatus = iota + 1
-	// The template file already contains the new image tag.
-	contentsUnchanged
-	// The placeholder has been replaced with the new image tag.
-	placeholderReplaced
-)
-
 // templateFile represents a template file.
 type templateFile struct {
 	filename    string
-	contents    []byte
 	placeholder []byte
-	status      templateFileStatus
 }
 
-// checkPlaceholder ensures that the placeholder for the new image tag exists
-// in the file and is consistent across all occurrences in the template file
-// if the placeholder is the image name itself.
-func (tf *templateFile) checkPlaceholder(imageName string) error {
-	// Return early if this template file was already checked via a
-	// previous target file.
-	if tf.status >= placeholderChecked {
-		return nil
-	}
-
+// determinePlaceholder finds the placeholder for the new image tag in the
+// template file, and when the placeholder is the image name itself, ensures
+// that all occurrences of that image name are identical.
+func (tf *templateFile) determinePlaceholder(contents []byte,
+	imageName string) error {
 	if len(tf.placeholder) == 0 {
 		// Use the image name itself as the placeholder.
 		// Image tag may contain lowercase and uppercase
@@ -175,7 +159,7 @@ func (tf *templateFile) checkPlaceholder(imageName string) error {
 		re := regexp.MustCompile(
 			regexp.QuoteMeta(imageName) + "(?::[-.\\w]+)?")
 
-		imageRefs := re.FindAll(tf.contents, -1)
+		imageRefs := re.FindAll(contents, -1)
 
 		if len(imageRefs) == 0 {
 			return fmt.Errorf(
@@ -194,30 +178,12 @@ func (tf *templateFile) checkPlaceholder(imageName string) error {
 					tf.filename, imageName)
 			}
 		}
-	} else if !bytes.Contains(tf.contents, tf.placeholder) {
+	} else if !bytes.Contains(contents, tf.placeholder) {
 		return fmt.Errorf("'%s' does not contain occurrences of '%s'",
 			tf.filename, tf.placeholder)
 	}
 
-	tf.status = placeholderChecked
 	return nil
-}
-
-// replacePlaceholder replaces the placeholder with the new image tag in the
-// template file and returns true if the file's contents were changed.
-func (tf *templateFile) replacePlaceholder(fingerprintedImageName []byte) {
-	if tf.status < contentsUnchanged {
-		// Skip updating the template file if it already contains the
-		// right reference.
-		if bytes.Equal(tf.placeholder, fingerprintedImageName) {
-			tf.status = contentsUnchanged
-		} else {
-			tf.contents = bytes.ReplaceAll(tf.contents,
-				tf.placeholder, fingerprintedImageName)
-
-			tf.status = placeholderReplaced
-		}
-	}
 }
 
 // targetFile represents a target file to overwrite with the template file's
@@ -360,13 +326,8 @@ func main() {
 	var targetFiles []targetFile
 
 	newTemplateFile := func(filename string) *templateFile {
-		contents, err := os.ReadFile(filename)
-		if err != nil {
-			fmtErrorExit("could not read template file: %v", err)
-		}
 		return &templateFile{
 			filename:    filename,
-			contents:    contents,
 			placeholder: placeholder,
 		}
 	}
@@ -464,7 +425,12 @@ func main() {
 	// before building the image. Use the image name as the placeholder
 	// if no placeholder was specified.
 	for _, tf := range targetFiles {
-		if err := tf.template.checkPlaceholder(imageName); err != nil {
+		contents, err := os.ReadFile(tf.template.filename)
+		if err != nil {
+			fmtErrorExit("could not read template file: %v", err)
+		}
+		if err := tf.template.determinePlaceholder(contents,
+			imageName); err != nil {
 			errorExit(err)
 		}
 	}
@@ -479,19 +445,101 @@ func main() {
 	}
 
 	for _, tf := range targetFiles {
-		tf.template.replacePlaceholder([]byte(fingerprintedImageName))
+		templateFilename := tf.template.filename
+		targetFilename := tf.filename
 
-		// Skip unchanged update-in-place files.
-		if tf.template.status == contentsUnchanged &&
-			tf.template.filename == tf.filename {
+		// Open template file for reading.
+		templateFile, err := os.OpenFile(templateFilename, os.O_RDONLY, 0)
+		if err != nil {
+			fmtErrorExit("could not open %s: %v",
+				templateFilename, err)
+		}
+		defer templateFile.Close()
+
+		// Acquire an exclusive lock on the template file before
+		// reading it to prevent concurrent updates.
+		if err = syscall.Flock(int(templateFile.Fd()),
+			syscall.LOCK_EX); err != nil {
+			fmtErrorExit("could not lock template file %s: %v",
+				templateFilename, err)
+		}
+
+		// Read the template file contents again (in case
+		// it was changed while the image was being built).
+		contents, err := io.ReadAll(templateFile)
+		if err != nil {
+			fmtErrorExit("could not read %s: %v",
+				templateFilename, err)
+		}
+
+		if err := tf.template.determinePlaceholder(contents,
+			imageName); err != nil {
+			errorExit(err)
+		}
+
+		// Check if template and target are the same file by comparing
+		// inodes.
+		var stat syscall.Stat_t
+		if err = syscall.Stat(templateFilename, &stat); err != nil {
+			fmtErrorExit("could not stat template file %s: %v",
+				templateFilename, err)
+		}
+		templateInode := stat.Ino
+		targetInode := uint64(0)
+		if err = syscall.Stat(targetFilename, &stat); err == nil {
+			targetInode = stat.Ino
+		} else if !os.IsNotExist(err) {
+			fmtErrorExit("could not stat target file %s: %v",
+				targetFilename, err)
+		}
+
+		// Replace the placeholder with the new image tag unless it is
+		// already there.
+		if !bytes.Equal(tf.template.placeholder,
+			[]byte(fingerprintedImageName)) {
+			contents = bytes.ReplaceAll(contents,
+				tf.template.placeholder,
+				[]byte(fingerprintedImageName))
+		} else if templateInode == targetInode {
+			// Skip updating the target file if it is the same file
+			// as the template file and already contains the right
+			// image tag.
 			continue
 		}
 
-		// Replace the placeholder with the fingerprinted image name.
-		if err = os.WriteFile(tf.filename,
-			tf.template.contents, 0600); err != nil {
-			fmtErrorExit("could not overwrite %s: %v",
-				tf.filename, err)
+		// Open target file for writing while holding the exclusive lock
+		// on the template file. If the template and target are the same
+		// file, the lock on the target file will not be acquired.
+		targetFile, err := os.OpenFile(targetFilename,
+			os.O_RDWR|os.O_CREATE, 0666)
+		if err != nil {
+			fmtErrorExit("could not open target file %s: %v",
+				targetFilename, err)
+		}
+		defer targetFile.Close()
+
+		// Acquire an exclusive lock on the target file unless it is
+		// the same file as the template file.
+		if templateInode != targetInode {
+			if err = syscall.Flock(int(targetFile.Fd()),
+				syscall.LOCK_EX); err != nil {
+				fmtErrorExit("could not lock file %s: %v",
+					targetFilename, err)
+			}
+		}
+
+		// Write the processed template to the target file.
+		if _, err := targetFile.Write(contents); err != nil {
+			fmtErrorExit("could not write to target file %s: %v",
+				targetFilename, err)
+		}
+		if err := targetFile.Truncate(int64(len(contents))); err != nil {
+			fmtErrorExit("could not truncate target file %s: %v",
+				targetFilename, err)
+		}
+		if err := targetFile.Sync(); err != nil {
+			fmtErrorExit("could not sync target file %s: %v",
+				targetFilename, err)
 		}
 	}
 }
