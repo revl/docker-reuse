@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +11,9 @@ func TestCollectSourcesFromDockerfile(t *testing.T) {
 	tests := []struct {
 		name            string
 		dockerfile      string
+		buildArgs       []string
 		expectedSources []string
+		expectedError   string
 	}{
 		{
 			name: "Basic COPY commands",
@@ -54,6 +57,59 @@ RUN echo "test"
 ENV TEST=value`,
 			expectedSources: []string{},
 		},
+		{
+			name: "ARG expansion from build argument",
+			dockerfile: `FROM ubuntu:20.04
+ARG APP
+COPY apps/${APP} /workdir/apps/${APP}`,
+			buildArgs:       []string{"APP=web1"},
+			expectedSources: []string{"apps/web1"},
+		},
+		{
+			name: "ARG expansion without braces",
+			dockerfile: `FROM ubuntu:20.04
+ARG APP
+COPY apps/$APP /workdir/`,
+			buildArgs:       []string{"APP=web1"},
+			expectedSources: []string{"apps/web1"},
+		},
+		{
+			name: "ARG default value",
+			dockerfile: `FROM ubuntu:20.04
+ARG APP=web2
+COPY apps/${APP} /workdir/`,
+			expectedSources: []string{"apps/web2"},
+		},
+		{
+			name: "Build argument overrides ARG default",
+			dockerfile: `FROM ubuntu:20.04
+ARG APP=web2
+COPY apps/${APP} /workdir/`,
+			buildArgs:       []string{"APP=web3"},
+			expectedSources: []string{"apps/web3"},
+		},
+		{
+			name: "Multiple ARG references in one source",
+			dockerfile: `FROM ubuntu:20.04
+ARG DIR=apps
+ARG APP
+COPY ${DIR}/${APP}/package.json /workdir/`,
+			buildArgs:       []string{"APP=web1"},
+			expectedSources: []string{"apps/web1/package.json"},
+		},
+		{
+			name: "Undefined ARG in COPY source",
+			dockerfile: `FROM ubuntu:20.04
+COPY apps/${APP} /workdir/`,
+			expectedError: "build argument 'APP' is not set",
+		},
+		{
+			name: "Declared ARG without a value",
+			dockerfile: `FROM ubuntu:20.04
+ARG APP
+COPY apps/${APP} /workdir/`,
+			expectedError: "build argument 'APP' is not set",
+		},
 	}
 
 	for _, tt := range tests {
@@ -80,7 +136,17 @@ ENV TEST=value`,
 			defer f.Close()
 
 			// Test source collection
-			sources, err := collectSourcesFromDockerfile(f)
+			sources, err := collectSourcesFromDockerfile(
+				f, tt.buildArgs)
+			if tt.expectedError != "" {
+				if err == nil || !strings.Contains(
+					err.Error(), tt.expectedError) {
+					t.Fatalf("collectSourcesFromDockerfile() "+
+						"error = %v, want %q",
+						err, tt.expectedError)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("collectSourcesFromDockerfile() "+
 					"error = %v", err)

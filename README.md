@@ -50,6 +50,12 @@ Positional arguments are:
   provided, it is taken from the environment variable having the same name as
   the build argument.
 
+  Build arguments (and `ARG` defaults) are expanded in `COPY` and `ADD`
+  source paths, so a single parameterized Dockerfile (e.g.
+  `COPY apps/${APP} ...`) fingerprints only the sources selected by the
+  given arguments. Referencing an unset or empty argument in a source path
+  is an error rather than a silent empty expansion.
+
 Options:
 
 - `-f, --dockerfile=FILE`

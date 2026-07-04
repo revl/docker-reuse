@@ -92,14 +92,16 @@ func hashFiles(pathname string) (fingerprint, error) {
 
 // parseAndHashDockerfile parses the Dockerfile, extracts the sources from it,
 // and returns the the sources and the hashsum of the Dockerfile using SHA1.
-func parseAndHashDockerfile(dockerfile string) ([]string, fingerprint, error) {
+func parseAndHashDockerfile(dockerfile string, buildArgs []string) (
+	[]string, fingerprint, error) {
+
 	f, err := os.Open(dockerfile)
 	if err != nil {
 		return nil, fingerprint{}, err
 	}
 	defer f.Close()
 
-	sources, err := collectSourcesFromDockerfile(f)
+	sources, err := collectSourcesFromDockerfile(f, buildArgs)
 	if err != nil {
 		return nil, fingerprint{}, err
 	}
@@ -134,7 +136,7 @@ func computeImageFingerprint(workingDir, dockerfile string, buildArgs []string,
 	}
 
 	sources, dockerfileFingerprint, err := parseAndHashDockerfile(
-		dockerfile)
+		dockerfile, buildArgs)
 	if err != nil {
 		return fingerprint{}, err
 	}

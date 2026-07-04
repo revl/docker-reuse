@@ -128,7 +128,7 @@ RUN echo "test"
 	}
 
 	// Test parsing and hashing
-	sources, fp, err := parseAndHashDockerfile(dockerfilePath)
+	sources, fp, err := parseAndHashDockerfile(dockerfilePath, nil)
 	if err != nil {
 		t.Fatalf("parseAndHashDockerfile() error = %v", err)
 	}
